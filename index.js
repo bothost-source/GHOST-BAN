@@ -984,6 +984,15 @@ ${telegramBot ? '🤖 Telegram Pairing: Active' : '⚠️  Telegram Pairing: Dis
 }
 
 main();
-
+// ========== ADD THIS RIGHT AFTER main(); ==========
+const http = require('http');
+const PORT = process.env.PORT || 3000;
+http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('GHOST BAN BOT ACTIVE');
+}).listen(PORT, () => {
+    console.log(`Keep-alive server running on port ${PORT}`);
+});
+// ========== YOUR EXISTING CODE CONTINUES BELOW ==========
 const ignoredErrors = ['Socket connection timeout', 'EKEYTYPE', 'item-not-found', 'rate-overlimit', 'Connection Closed', 'Timed Out', 'Value not found', 'member list is inaccessible'];
 process.on('unhandledRejection', reason => { if (ignoredErrors.some(e => String(reason).includes(e))) return; console.log('Unhandled Rejection:', reason); });
