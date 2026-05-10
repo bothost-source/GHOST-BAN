@@ -78,7 +78,6 @@ app.post('/api/pair', async (req, res) => {
     }
 });
 
-
 // ========== CONFIG ==========
 const ACCESS_KEY = process.env.ACCESS_KEY || 'GHOST-BAN-2026';
 const PORT = process.env.PORT || 3000;
