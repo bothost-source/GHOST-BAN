@@ -17,7 +17,6 @@
             position: relative;
         }
 
-        /* Animated background grid */
         body::before {
             content: '';
             position: fixed;
@@ -30,7 +29,6 @@
             z-index: 0;
         }
 
-        /* Scanline effect */
         body::after {
             content: '';
             position: fixed;
@@ -60,7 +58,6 @@
             z-index: 1;
         }
 
-        /* HEADER */
         .header {
             text-align: center;
             padding: 40px 0;
@@ -115,7 +112,6 @@
             text-transform: uppercase;
         }
 
-        /* LOGIN GATEWAY */
         .gateway {
             background: rgba(255,0,0,0.05);
             border: 1px solid #ff0000;
@@ -203,7 +199,6 @@
             transform: translateY(0);
         }
 
-        /* DASHBOARD */
         .dashboard {
             display: none;
         }
@@ -294,7 +289,6 @@
             font-size: 11px;
         }
 
-        /* TERMINAL EFFECT */
         .terminal {
             background: #000;
             border: 2px solid #ff0000;
@@ -324,7 +318,6 @@
             outline: none;
         }
 
-        /* ANIMATIONS */
         @keyframes pulse {
             0%, 100% { opacity: 1; }
             50% { opacity: 0.5; }
@@ -336,7 +329,6 @@
 
         .hidden { display: none !important; }
 
-        /* Responsive */
         @media (max-width: 600px) {
             .title { font-size: 28px; letter-spacing: 5px; }
             .header::before, .header::after { display: none; }
@@ -346,13 +338,11 @@
 </head>
 <body>
     <div class="container">
-        <!-- HEADER -->
         <div class="header">
             <h1 class="title">GHOST BAN</h1>
-            <p class="subtitle">☠️ Ban tool made by LORDTARRIFIC, this is a strong ban tool we are not responsible for your actions we strongly advise the usage of a spare number to aviod any risk taking ☠️</p>
+            <p class="subtitle">☠️ Advanced WhatsApp Group Management Tool ☠️</p>
         </div>
 
-        <!-- LOGIN GATEWAY -->
         <div id="gateway" class="gateway">
             <div class="gateway-title">🔐 ACCESS GATEWAY</div>
             <p style="color: #ff3333; margin-bottom: 20px; font-size: 14px;">
@@ -367,9 +357,7 @@
             </div>
         </div>
 
-        <!-- DASHBOARD -->
         <div id="dashboard" class="dashboard">
-            <!-- STATUS PANEL -->
             <div class="panel">
                 <div class="panel-title">📊 SYSTEM STATUS</div>
                 <div class="status-bar">
@@ -388,17 +376,15 @@
                 </div>
             </div>
 
-            <!-- PAIR PANEL -->
             <div class="panel">
                 <div class="panel-title">📱 PAIR WHATSAPP</div>
                 <div class="input-group">
-                    <input type="text" id="pairNumber" placeholder="PHONE NUMBER (e.g. 234712345678)">
+                    <input type="text" id="pairNumber" placeholder="PHONE NUMBER (e.g. 237620080874)">
                 </div>
                 <button class="btn" onclick="pairWhatsApp()">🔗 GENERATE PAIRING CODE</button>
                 <div id="pairResult" style="margin-top: 15px; font-size: 14px;"></div>
             </div>
 
-            <!-- BAN PANEL -->
             <div class="panel">
                 <div class="panel-title">☠️ GHOST BAN</div>
                 <div class="input-group">
@@ -408,7 +394,6 @@
                 <div id="banResult" style="margin-top: 15px; font-size: 14px;"></div>
             </div>
 
-            <!-- PREMIUM PANEL -->
             <div class="panel">
                 <div class="panel-title">⭐ PREMIUM MANAGEMENT</div>
                 <div style="display: flex; gap: 10px; flex-wrap: wrap;">
@@ -420,7 +405,6 @@
                 <div id="premResult" style="margin-top: 15px; font-size: 14px;"></div>
             </div>
 
-            <!-- LOG PANEL -->
             <div class="panel">
                 <div class="panel-title">📜 ACTIVITY LOG</div>
                 <div class="log-box" id="logBox">
@@ -451,7 +435,6 @@
                 return;
             }
 
-            // Test the key
             fetch('/health', { headers: { 'X-Access-Key': key } })
                 .then(r => {
                     if (r.ok) {
@@ -521,8 +504,8 @@
             .then(data => {
                 if (data.success) {
                     document.getElementById('banResult').innerHTML = 
-                        '<span style="color: #00ff00;">✅ Trap group created! Report manually.</span>';
-                    log('✅ Ban executed on ' + num, 'success');
+                        '<span style="color: #00ff00;">✅ ' + data.message + '</span>';
+                    log('✅ Ban executed on ' + num + ' - ' + data.message, 'success');
                 } else {
                     document.getElementById('banResult').innerHTML = '<span style="color: #ff0000;">❌ ' + (data.error || 'Failed') + '</span>';
                     log('❌ Ban failed: ' + (data.error || 'Unknown'), 'error');
@@ -573,7 +556,6 @@
             });
         }
 
-        // Enter key support
         document.getElementById('accessKey').addEventListener('keypress', (e) => {
             if (e.key === 'Enter') login();
         });
