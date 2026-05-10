@@ -8,7 +8,7 @@ const { default: makeWASocket, useMultiFileAuthState, delay, Browsers, Disconnec
 const pino = require("pino"); // Added this
 const app = express();
 app.use(express.json());
-app.use(express.static(__dirname));
+app.use(express.static(path.join(__dirname, 'public')));
 
 // --- PAIRING ROUTE ---
 app.post('/api/pair', async (req, res) => {
