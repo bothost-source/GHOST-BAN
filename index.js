@@ -12,36 +12,93 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 // --- PAIRING ROUTE ---
 app.post('/api/pair', async (req, res) => {
+    let responseSent = false;
+    let sock = null;
+
     try {
         const { phone } = req.body;
         if (!phone) return res.status(400).json({ error: 'Number required' });
         
         const cleanNumber = phone.replace(/\D/g, '');
         const sessionPath = path.join(__dirname, 'sessions', `temp_${cleanNumber}`);
+        
+        // Clean old session to force fresh pairing
+        if (fs.existsSync(sessionPath)) {
+            fs.rmSync(sessionPath, { recursive: true, force: true });
+        }
+        
         const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
 
-        const sock = makeWASocket({
+        sock = makeWASocket({
             auth: state,
             logger: pino({ level: 'silent' }),
-            browser: ["Ubuntu", "Chrome", "20.0.04"]
+            browser: Browsers.ubuntu('Chrome'),
+            printQRInTerminal: false
         });
 
         sock.ev.on('creds.update', saveCreds);
 
-        // 7-second delay to match your working bot
-        setTimeout(async () => {
-            try {
-                const code = await sock.requestPairingCode(cleanNumber);
-                res.json({ success: true, code: code });
-            } catch (err) {
-                res.status(500).json({ error: "WhatsApp Fail" });
+        // Listen for connection updates to capture pairing code
+        sock.ev.on('connection.update', async (update) => {
+            const { connection, lastDisconnect, qr, isNewLogin } = update;
+
+            // When QR is generated for new login, request pairing code
+            if (qr && isNewLogin && !responseSent) {
+                try {
+                    // Baileys exposes pairing code through the socket's auth state
+                    const code = await sock.requestPairingCode(cleanNumber);
+                    responseSent = true;
+                    
+                    // Format code with dashes for readability
+                    const formattedCode = code.match(/.{1,4}/g)?.join('-') || code;
+                    
+                    res.json({ 
+                        success: true, 
+                        code: formattedCode,
+                        rawCode: code 
+                    });
+                    
+                    // Close socket after getting code
+                    setTimeout(() => sock?.end(), 2000);
+                    
+                } catch (err) {
+                    console.error('Pairing code request failed:', err.message);
+                    if (!responseSent) {
+                        responseSent = true;
+                        res.status(500).json({ error: "WhatsApp Fail: " + err.message });
+                    }
+                }
             }
-                }, 7000);
+
+            if (connection === 'open') {
+                console.log(chalk.green(`✅ ${cleanNumber}: Connected`));
+            }
+
+            if (connection === 'close') {
+                const statusCode = lastDisconnect?.error?.output?.statusCode;
+                if (statusCode === DisconnectReason.loggedOut && !responseSent) {
+                    responseSent = true;
+                    res.status(500).json({ error: "WhatsApp Fail: Logged out" });
+                }
+            }
+        });
+
+        // 30-second timeout
+        setTimeout(() => {
+            if (!responseSent) {
+                responseSent = true;
+                sock?.end();
+                res.status(500).json({ error: "WhatsApp Fail: Timeout - pairing code not generated" });
+            }
+        }, 30000);
 
     } catch (e) {
-        res.status(500).json({ error: "Server Error" });
+        if (!responseSent) {
+            responseSent = true;
+            res.status(500).json({ error: "Server Error: " + e.message });
+        }
     }
-}); // <--- THIS is the magic line that fixes all the red below it.
+});
 
 // ========== CONFIG ==========
 const ACCESS_KEY = process.env.ACCESS_KEY || 'GHOST-BAN-2026';
