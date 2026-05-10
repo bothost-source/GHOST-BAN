@@ -72,7 +72,6 @@ const GROUP_DESCRIPTION = "⚠️ **RESTRICTED NODE: ILLEGAL EXCHANGE HUB** ⚠�
 const GROUP_PROFILE_PIC_PATH = path.join(__dirname, 'ghost_ban_profile.jpg');
 
 // ========== BAILEYS SETUP ==========
-let makeWASocket, Browsers, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, jidDecode, downloadContentFromMessage, jidNormalizedUser;
 
 const loadBaileys = async () => {
     const baileys = await import('@whiskeysockets/baileys');
