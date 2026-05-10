@@ -6,46 +6,46 @@ const fs = require('fs');
 const chalk = require('chalk');
 const { default: makeWASocket, useMultiFileAuthState, delay } = require("@whiskeysockets/baileys"); // Added this
 const pino = require("pino"); // Added this
-const app = express(); // Added this
+const app = express();
+app.use(express.json());
+app.use(express.static(__dirname));
 
-app.use(express.json()); // Added this so it can read your phone number
-app.use(express.static(__dirname)); // This tells the server to show your index.html
-
-
-// ========== CONFIG ==========
-const ACCESS_KEY = process.env.ACCESS_KEY || 'GHOST-BAN-2026';
-const PORT = process.env.PORT || 3000;
-
-// --- PAIRING CODE GENERATOR ---
+// --- PAIRING ROUTE ---
 app.post('/api/pair', async (req, res) => {
-    const { phone } = req.body;
-    if (!phone) return res.status(400).json({ error: 'Number required' });
-    
-    const cleanNumber = phone.replace(/\D/g, '');
-    const sessionPath = path.join(__dirname, 'sessions', `temp_${cleanNumber}`);
-    
     try {
+        const { phone } = req.body;
+        if (!phone) return res.status(400).json({ error: 'Number required' });
+        
+        const cleanNumber = phone.replace(/\D/g, '');
+        const sessionPath = path.join(__dirname, 'sessions', `temp_${cleanNumber}`);
         const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
 
         const sock = makeWASocket({
             auth: state,
             logger: pino({ level: 'silent' }),
-            browser: ["Ubuntu", "Chrome", "20.0.04"] // Triggers mobile notification
+            browser: ["Ubuntu", "Chrome", "20.0.04"]
         });
 
         sock.ev.on('creds.update', saveCreds);
 
-        // Wait 7 seconds just like your old bot
-        await new Promise(resolve => setTimeout(resolve, 7000));
-        
-        const code = await sock.requestPairingCode(cleanNumber);
-        res.json({ success: true, code: code });
-    } catch (err) {
-        res.status(500).json({ error: "WhatsApp Fail" });
-    }
-});
-// ------------------------------
+        // 7-second delay to match your working bot
+        setTimeout(async () => {
+            try {
+                const code = await sock.requestPairingCode(cleanNumber);
+                res.json({ success: true, code: code });
+            } catch (err) {
+                res.status(500).json({ error: "WhatsApp Fail" });
+            }
+                }, 7000);
 
+    } catch (e) {
+        res.status(500).json({ error: "Server Error" });
+    }
+}); // <--- THIS is the magic line that fixes all the red below it.
+
+// ========== CONFIG ==========
+const ACCESS_KEY = process.env.ACCESS_KEY || 'GHOST-BAN-2026';
+const PORT = process.env.PORT || 3000;
 // ========== PREMIUM DATABASE ==========
 const PREMIUM_DB_PATH = path.join(__dirname, 'premium.json');
 function loadPremiumDB() {
