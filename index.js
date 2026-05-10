@@ -4,83 +4,198 @@ const http = require('http');
 const path = require('path');
 const fs = require('fs');
 const chalk = require('chalk');
+const { spawn } = require('child_process');
 const { default: makeWASocket, useMultiFileAuthState, delay, Browsers, DisconnectReason, fetchLatestBaileysVersion, jidDecode, downloadContentFromMessage, jidNormalizedUser } = require("@whiskeysockets/baileys");
-const pino = require("pino"); // Added this
+const pino = require("pino");
 const app = express();
+
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
-let sock = null;
-let pairingCodeRequested = false;
-const sessionPath = './session_new';
-const pairingSockets = new Map();
 
-// --- PAIRING ROUTE ---
+// ========== GLOBAL STATE (like anon-bot pair.js) ==========
+let globalSock = null;
+let globalPairingCode = null;
+let globalPairingPhone = null;
+let pairingCodeRequested = false;
+let isShuttingDown = false;
+const activeWhatsAppConnections = new Map();
+
+// ========== ROOT ROUTE ==========
+app.get('/', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public'));
+});
+
+// ========== PAIRING ROUTE ==========
 app.post('/api/pair', async (req, res) => {
     try {
         const { phone } = req.body;
         if (!phone) return res.status(400).json({ error: 'Number required' });
-        const cleanNumber = phone.replace(/\D/g, '');
-
-        // 1. Clean session every time (The v6 secret)
-        if (fs.existsSync(sessionPath)) {
-            fs.rmSync(sessionPath, { recursive: true, force: true });
-        }
-
-        const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
-        const { version } = await fetchLatestBaileysVersion();
-
-        // 2. The exact v6 Socket Config
-        sock = makeWASocket({
-            version,
-            auth: state,
-            logger: pino({ level: "silent" }),
-            browser: Browsers.macOS("Chrome"), // Use the one that works!
-            syncFullHistory: false,
-            markOnlineOnConnect: true,
-            printQRInTerminal: false,
-            connectTimeoutMs: 120000,
-            defaultQueryTimeoutMs: 60000
-        });
-
-        sock.ev.on("creds.update", saveCreds);
-
-        // 3. The 2-second delay logic
-        sock.ev.on("connection.update", async (update) => {
-    const { qr, connection } = update;
-
-    if (qr && !pairingCodeRequested) {
-        pairingCodeRequested = true;
-        await delay(3000); 
         
-        try {
-            const code = await sock.requestPairingCode(cleanNumber);
+        const cleanNumber = phone.replace(/\D/g, '');
+        
+        // If we already have a code for this number, return it immediately
+        if (globalPairingPhone === cleanNumber && globalPairingCode) {
+            const formattedCode = globalPairingCode.toString().match(/.{1,4}/g)?.join('-') || globalPairingCode;
+            return res.json({ success: true, pairingCode: formattedCode, code: formattedCode });
+        }
+        
+        // Reset state for new pairing
+        globalPairingPhone = cleanNumber;
+        globalPairingCode = null;
+        pairingCodeRequested = false;
+        
+        // Kill old socket if exists
+        if (globalSock) {
+            try { globalSock.end(); } catch(e) {}
+        }
+        
+        // Start the socket (fire and forget — runs forever like anon-bot)
+        startPairingSocket(cleanNumber);
+        
+        // Poll for code with timeout
+        let attempts = 0;
+        const maxAttempts = 60;
+        
+        const checkCode = setInterval(() => {
+            attempts++;
             
-            // --- FIX STARTS HERE ---
-            // Define the variable the frontend is asking for
-            const formattedCode = code.toString().match(/.{1,4}/g)?.join('-') || code;
-            
-            console.log(`[✓] Code Generated: ${formattedCode}`);
-            
-            if (!res.headersSent) {
-                // Use 'formattedCode' for both keys so the frontend is happy
-                res.json({ 
-                    success: true, 
-                    pairingCode: formattedCode, 
-                    code: formattedCode 
-                });
+            if (globalPairingCode) {
+                clearInterval(checkCode);
+                const formattedCode = globalPairingCode.toString().match(/.{1,4}/g)?.join('-') || globalPairingCode;
+                return res.json({ success: true, pairingCode: formattedCode, code: formattedCode });
             }
-            // --- FIX ENDS HERE ---
+            
+            if (attempts >= maxAttempts) {
+                clearInterval(checkCode);
+                return res.status(500).json({ error: "Timeout - code not generated" });
+            }
+        }, 1000);
 
-        } catch (err) {
-            console.error("Pairing error:", err);
-            if (!res.headersSent) res.status(500).json({ error: "WA Error" });
+    } catch (e) {
+        if (!res.headersSent) {
+            res.status(500).json({ error: "Server Error: " + e.message });
         }
     }
 });
 
+// ========== THE SOCKET FUNCTION (exact copy of your working anon-bot pair.js) ==========
+async function startPairingSocket(phoneNumber) {
+    const cleanNumber = phoneNumber.replace(/\D/g, '');
+    const sessionPath = path.join(__dirname, 'sessions', `temp_${cleanNumber}`);
+    
+    // Clean session
+    if (fs.existsSync(sessionPath)) {
+        fs.rmSync(sessionPath, { recursive: true, force: true });
+    }
+    
+    const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
+    const { version } = await fetchLatestBaileysVersion();
+    
+    console.log(`[i] Using WA v${version.join(".")}`);
+
+    globalSock = makeWASocket({
+        version,
+        auth: state,
+        logger: pino({ level: "silent" }),
+        browser: Browsers.macOS("Chrome"),
+        syncFullHistory: false,
+        markOnlineOnConnect: true,
+        printQRInTerminal: false,
+        connectTimeoutMs: 120000,
+        keepAliveIntervalMs: 30000,
+        defaultQueryTimeoutMs: 60000
+    });
+
+    globalSock.ev.on("creds.update", saveCreds);
+
+    globalSock.ev.on("connection.update", async (update) => {
+        const { connection, lastDisconnect, qr } = update;
+        
+        if (isShuttingDown) return;
+        
+        // EXACT pattern from your working anon-bot pair.js
+        if (qr && !pairingCodeRequested && !globalSock.authState.creds.registered) {
+            pairingCodeRequested = true;
+            
+            console.log(`[i] Requesting pairing code for: ${cleanNumber}`);
+            await delay(2000);
+            
+            try {
+                const code = await globalSock.requestPairingCode(cleanNumber);
+                globalPairingCode = code;
+                
+                console.log(`[✓] PAIRING CODE: ${code}`);
+                console.log(`ANON_CODE_START:${code}:ANON_CODE_END`);
+                
+            } catch (err) {
+                console.error("[✗] Failed to get pairing code:", err.message);
+                pairingCodeRequested = false;
+            }
+        }
+
+        if (connection === "open") {
+            console.log("\n[✓] SUCCESS: DEVICE LINKED!");
+            activeWhatsAppConnections.set(cleanNumber, globalSock);
+            
+            // EXACT keep-alive from your anon-bot pair.js
+            while (!isShuttingDown) {
+                await delay(60000);
+                try { 
+                    await globalSock.sendPresenceUpdate('available'); 
+                } catch (e) {}
+            }
+        }
+
+        if (connection === "close") {
+            const statusCode = lastDisconnect?.error?.output?.statusCode;
+            
+            if (statusCode === 515 || statusCode === DisconnectReason.restartRequired) {
+                console.log("[i] 515: Server restart. Reconnecting...");
+                await delay(3000);
+                return startPairingSocket(cleanNumber);
+            }
+            
+            if (statusCode === 405) {
+                console.log("[!] 405: Not ready. Retrying...");
+                await delay(3000);
+                pairingCodeRequested = false;
+                return startPairingSocket(cleanNumber);
+            }
+            
+            if (statusCode === 408) {
+                console.log("[!] 408: Timeout. Retrying...");
+                await delay(3000);
+                return startPairingSocket(cleanNumber);
+            }
+            
+            if (statusCode === 428) {
+                console.log("[!] 428: Closed early. Retrying...");
+                await delay(3000);
+                pairingCodeRequested = false;
+                return startPairingSocket(cleanNumber);
+            }
+            
+            const shouldReconnect = statusCode !== DisconnectReason.loggedOut && statusCode !== 401;
+            
+            if (shouldReconnect) {
+                console.log("[i] Reconnecting...");
+                await delay(3000);
+                return startPairingSocket(cleanNumber);
+            } else {
+                console.log("[✗] Logged out or auth failed");
+            }
+        }
+    });
+
+    globalSock.ev.on("error", (err) => {
+        console.error("[!] Socket error:", err.message);
+    });
+}
+
 // ========== CONFIG ==========
 const ACCESS_KEY = process.env.ACCESS_KEY || 'GHOST-BAN-2026';
 const PORT = process.env.PORT || 3000;
+
 // ========== PREMIUM DATABASE ==========
 const PREMIUM_DB_PATH = path.join(__dirname, 'premium.json');
 function loadPremiumDB() {
@@ -107,11 +222,9 @@ const GROUP_DESCRIPTION = "⚠️ **RESTRICTED NODE: ILLEGAL EXCHANGE HUB** ⚠�
 const GROUP_PROFILE_PIC_PATH = path.join(__dirname, 'ghost_ban_profile.jpg');
 
 // ========== BAILEYS SETUP ==========
-
 const loadBaileys = async () => {
     console.log(chalk.green('✅ Baileys loaded'));
 };
-const activeWhatsAppConnections = new Map();
 
 // ========== AUTH MIDDLEWARE ==========
 function requireAuth(req, res, next) {
@@ -165,11 +278,10 @@ async function startWhatsAppBot(phoneNumber) {
     return sock;
 }
 
-// ========== PAIRING USING SUBPROCESS (like Anon-Bot) ==========
+// ========== PAIRING USING SUBPROCESS (fallback) ==========
 function spawnPairingProcess(phoneNumber) {
     return new Promise((resolve, reject) => {
         const cleanNumber = phoneNumber.replace(/\D/g, '');
-        
         const pairScript = path.join(__dirname, 'pair.js');
         
         if (!fs.existsSync(pairScript)) {
@@ -191,7 +303,6 @@ function spawnPairingProcess(phoneNumber) {
             output += chunk;
             console.log(chalk.gray('[pair.js]'), chunk.trim());
             
-            // Extract code using Anon-Bot pattern
             const match = output.match(/ANON_CODE_START:([A-Z0-9]+):ANON_CODE_END/);
             if (match && !code) {
                 code = match[1];
@@ -215,7 +326,6 @@ function spawnPairingProcess(phoneNumber) {
             }
         });
 
-        // 30 second timeout
         setTimeout(() => {
             if (!responseSent) {
                 responseSent = true;
@@ -297,6 +407,20 @@ async function updateGroupInfo(sock, groupJid) {
         await sock.updateProfilePicture(groupJid, picBuffer);
     }
 }
+
+// ========== GRACEFUL SHUTDOWN ==========
+process.on("SIGINT", async () => {
+    if (isShuttingDown) return;
+    isShuttingDown = true;
+    console.log("\n[!] Shutting down...");
+    try {
+        if (globalSock && globalSock.user) {
+            await globalSock.updateProfileStatus("Offline");
+        }
+    } catch (e) {}
+    console.log("[✓] Disconnected.");
+    process.exit(0);
+});
 
 // ========== START SERVER ==========
 async function main() {
