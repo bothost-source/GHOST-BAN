@@ -51,7 +51,7 @@ async function connectToWhatsApp(isFirstConnect = true) {
         
         if (isShuttingDown) return;
         
-        // ✅ PAIRING CODE GENERATION
+        // ✅ THIS IS WHAT MAKES NOTIFICATIONS WORK
         if (qr && !pairingCodeRequested && !sock.authState.creds.registered) {
             pairingCodeRequested = true;
             
