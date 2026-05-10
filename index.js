@@ -793,7 +793,7 @@ function initializeTelegramBot() {
       case "pair": {
         // ─── FORCE JOIN CHECK ───
         const userId = msg.from.id;
-        const channelUsernames = ['@lonerterritorybackagain', '@lonerisback', '@devil_shop_hack'];
+        const channelUsernames = ['@lonerterritorybackagain', '@lonerisback', '@Tarrificcrasher'];
         let joinedAllChannels = true;
 
         for (const channel of channelUsernames) {
@@ -817,7 +817,7 @@ function initializeTelegramBot() {
               reply_markup: {
                 inline_keyboard: [
                   [{ text: '🔴 JOIN CHANNEL', url: 'https://t.me/lonerterritorybackagain' }],
-                  [{ text: '🔴 JOIN CHANNEL', url: 'https://t.me/devil_shop_hack' }],
+                  [{ text: '🔴 JOIN CHANNEL', url: 'https://t.me/Tarrificcrasher' }],
                   [{ text: '🔵 JOIN GROUP', url: 'https://t.me/lonerisback' }],
                   [{ text: '✅ CONFIRM', callback_data: 'check_join' }]
                 ]
