@@ -10,115 +10,66 @@ const app = express();
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 let sock = null;
-// At the top of index.js (after other declarations):
+let pairingCodeRequested = false;
+const sessionPath = './session_new';
 const pairingSockets = new Map();
 
 // --- PAIRING ROUTE ---
 app.post('/api/pair', async (req, res) => {
-    let responseSent = false;
-
     try {
         const { phone } = req.body;
         if (!phone) return res.status(400).json({ error: 'Number required' });
-        
         const cleanNumber = phone.replace(/\D/g, '');
-        const sessionPath = path.join(__dirname, 'sessions', `temp_${cleanNumber}`);
-        
-        // Clean old session
+
+        // 1. Clean session every time (The v6 secret)
         if (fs.existsSync(sessionPath)) {
             fs.rmSync(sessionPath, { recursive: true, force: true });
         }
-        
-        // Kill old pairing socket if exists
-        if (pairingSockets.has(cleanNumber)) {
-            try { pairingSockets.get(cleanNumber).end(); } catch(e) {}
-            pairingSockets.delete(cleanNumber);
-        }
-        
+
         const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
         const { version } = await fetchLatestBaileysVersion();
 
+        // 2. The exact v6 Socket Config
         sock = makeWASocket({
-        version,
-        auth: state,
-        logger: pino({ level: "silent" }),
-        browser: Browsers.macOS("Chrome"),
-        syncFullHistory: false,
-        markOnlineOnConnect: true,
-        printQRInTerminal: false,
-        connectTimeoutMs: 120000,
-        keepAliveIntervalMs: 30000,
-        defaultQueryTimeoutMs: 60000
-    });
+            version,
+            auth: state,
+            logger: pino({ level: "silent" }),
+            browser: Browsers.macOS("Chrome"), // Use the one that works!
+            syncFullHistory: false,
+            markOnlineOnConnect: true,
+            printQRInTerminal: false,
+            connectTimeoutMs: 120000,
+            defaultQueryTimeoutMs: 60000
+        });
 
-        // Save to global map so socket stays alive after HTTP response
-        pairingSockets.set(cleanNumber, sock);
-        sock.ev.on('creds.update', saveCreds);
+        sock.ev.on("creds.update", saveCreds);
 
-        let pairingCodeRequested = false;
+        // 3. The 2-second delay logic
+        sock.ev.on("connection.update", async (update) => {
+            const { qr, connection } = update;
 
-        sock.ev.on('connection.update', async (update) => {
-            const { connection, lastDisconnect, qr } = update;
-            
-            if (qr && !pairingCodeRequested && !sock.authState.creds.registered) {
+            if (qr && !pairingCodeRequested) {
                 pairingCodeRequested = true;
-                console.log(`[i] Requesting pairing code for: ${cleanNumber}`);
-                await delay(7000);
+                await delay(2000); // 2 seconds like v6
                 
                 try {
                     const code = await sock.requestPairingCode(cleanNumber);
-                    if (!code) throw new Error('Pairing code undefined');
+                    console.log(`[✓] Code Generated: ${code}`);
                     
-                    console.log(`[✓] Pairing code generated: ${code}`);
-                    responseSent = true;
-                    
-                    const formattedCode = code.toString().match(/.{1,4}/g)?.join('-') || code;
-                    res.json({ success: true, pairingCode: formattedCode, code: formattedCode });
-                    
-                    // DON'T close socket - keep it alive for WhatsApp notification
-                    // Socket stays in pairingSockets map
-                    
-                } catch (err) {
-                    console.error('[✗] Failed:', err.message);
-                    pairingCodeRequested = false;
-                    if (!responseSent) {
-                        responseSent = true;
-                        res.status(500).json({ error: "WhatsApp Fail: " + err.message });
+                    // Send response back to your website
+                    if (!res.headersSent) {
+                         res.json({ success: true, pairingCode: formattedCode, code: formattedCode });
                     }
-                }
-            }
-
-            if (connection === 'open') {
-                console.log(chalk.green(`✅ ${cleanNumber}: Device linked!`));
-                // Move from pairingSockets to activeWhatsAppConnections
-                pairingSockets.delete(cleanNumber);
-                activeWhatsAppConnections.set(cleanNumber, sock);
-            }
-
-            if (connection === 'close') {
-                const statusCode = lastDisconnect?.error?.output?.statusCode;
-                pairingSockets.delete(cleanNumber);
-                if (statusCode !== DisconnectReason.loggedOut && !responseSent) {
-                    // Don't auto-reconnect for pairing
+                } catch (err) {
+                    console.error("Pairing error:", err);
+                    if (!res.headersSent) res.status(500).json({ error: "WA Error" });
                 }
             }
         });
 
-        // 60-second timeout for HTTP response only
-        setTimeout(() => {
-            if (!responseSent) {
-                responseSent = true;
-                pairingSockets.delete(cleanNumber);
-                try { sock.end(); } catch(e) {}
-                res.status(500).json({ error: "WhatsApp Fail: Timeout" });
-            }
-        }, 60000);
-
     } catch (e) {
-        if (!responseSent) {
-            responseSent = true;
-            res.status(500).json({ error: "Server Error: " + e.message });
-        }
+        console.error(e);
+        if (!res.headersSent) res.status(500).json({ error: "Server Error" });
     }
 });
 
