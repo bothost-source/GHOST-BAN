@@ -68,7 +68,7 @@ app.post('/api/pair', async (req, res) => {
                     
                     const formattedCode = code?.match(/.{1,4}/g)?.join('-') || code;
                     
-                    res.json({ success: true, code: formattedCode });
+                    res.json({ success: true, pairingCode: formattedCode, code: formattedCode });
                     
                     // Close socket after sending code (we don't need to keep it open for pairing)
                     setTimeout(() => sock?.end(), 5000);
