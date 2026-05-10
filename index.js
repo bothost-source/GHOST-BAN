@@ -12,185 +12,86 @@ const app = express();
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// ========== GLOBAL STATE (like anon-bot pair.js) ==========
-let globalSock = null;
-let globalPairingCode = null;
-let globalPairingPhone = null;
-let pairingCodeRequested = false;
-let isShuttingDown = false;
+// ========== GLOBAL STATE ==========
 const activeWhatsAppConnections = new Map();
 
 // ========== ROOT ROUTE ==========
 app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public'));
+    res.sendFile(path.join(__dirname, 'index.html'));
 });
 
-// ========== PAIRING ROUTE ==========
+// ========== PAIRING USING SUBPROCESS (exactly like anon-bot) ==========
+function spawnPairingProcess(phoneNumber) {
+    return new Promise((resolve, reject) => {
+        const cleanNumber = phoneNumber.replace(/\D/g, '');
+        const workerScript = path.join(__dirname, 'pair-worker.js');
+        
+        if (!fs.existsSync(workerScript)) {
+            return reject(new Error('pair-worker.js not found'));
+        }
+
+        console.log(chalk.cyan(`[i] Spawning pair-worker.js for ${cleanNumber}`));
+        
+        const child = spawn('node', [workerScript, cleanNumber], {
+            stdio: ['pipe', 'pipe', 'pipe']
+        });
+
+        let output = '';
+        let code = null;
+        let responseSent = false;
+
+        child.stdout.on('data', (data) => {
+            const chunk = data.toString();
+            output += chunk;
+            console.log(chalk.gray('[worker]'), chunk.trim());
+            
+            const match = output.match(/ANON_CODE_START:([A-Z0-9]+):ANON_CODE_END/);
+            if (match && !code) {
+                code = match[1];
+                console.log(chalk.green(`[✓] Pairing code extracted: ${code}`));
+            }
+        });
+
+        child.stderr.on('data', (data) => {
+            console.error(chalk.red('[worker error]'), data.toString().trim());
+        });
+
+        child.on('close', (exitCode) => {
+            if (!responseSent) {
+                responseSent = true;
+                if (code) {
+                    const formattedCode = code.match(/.{1,4}/g)?.join("-") || code;
+                    resolve({ success: true, pairingCode: formattedCode, code: formattedCode });
+                } else {
+                    reject(new Error('Pairing process ended without generating code'));
+                }
+            }
+        });
+
+        setTimeout(() => {
+            if (!responseSent) {
+                responseSent = true;
+                child.kill();
+                reject(new Error('Timeout - pairing code not generated within 30 seconds'));
+            }
+        }, 30000);
+    });
+}
+
+// --- PAIRING ROUTE ---
 app.post('/api/pair', async (req, res) => {
     try {
         const { phone } = req.body;
         if (!phone) return res.status(400).json({ error: 'Number required' });
         
-        const cleanNumber = phone.replace(/\D/g, '');
+        const result = await spawnPairingProcess(phone);
+        res.json(result);
         
-        // If we already have a code for this number, return it immediately
-        if (globalPairingPhone === cleanNumber && globalPairingCode) {
-            const formattedCode = globalPairingCode.toString().match(/.{1,4}/g)?.join('-') || globalPairingCode;
-            return res.json({ success: true, pairingCode: formattedCode, code: formattedCode });
-        }
-        
-        // Reset state for new pairing
-        globalPairingPhone = cleanNumber;
-        globalPairingCode = null;
-        pairingCodeRequested = false;
-        
-        // Kill old socket if exists
-        if (globalSock) {
-            try { globalSock.end(); } catch(e) {}
-        }
-        
-        // Start the socket (fire and forget — runs forever like anon-bot)
-        startPairingSocket(cleanNumber);
-        
-        // Poll for code with timeout
-        let attempts = 0;
-        const maxAttempts = 60;
-        
-        const checkCode = setInterval(() => {
-            attempts++;
-            
-            if (globalPairingCode) {
-                clearInterval(checkCode);
-                const formattedCode = globalPairingCode.toString().match(/.{1,4}/g)?.join('-') || globalPairingCode;
-                return res.json({ success: true, pairingCode: formattedCode, code: formattedCode });
-            }
-            
-            if (attempts >= maxAttempts) {
-                clearInterval(checkCode);
-                return res.status(500).json({ error: "Timeout - code not generated" });
-            }
-        }, 1000);
-
-    } catch (e) {
-        if (!res.headersSent) {
-            res.status(500).json({ error: "Server Error: " + e.message });
-        }
+    } catch (err) {
+        console.error('Pairing error:', err.message);
+        res.status(500).json({ error: "WhatsApp Fail: " + err.message });
     }
 });
-
-// ========== THE SOCKET FUNCTION (exact copy of your working anon-bot pair.js) ==========
-async function startPairingSocket(phoneNumber) {
-    const cleanNumber = phoneNumber.replace(/\D/g, '');
-    const sessionPath = path.join(__dirname, 'sessions', `temp_${cleanNumber}`);
-    
-    // Clean session
-    if (fs.existsSync(sessionPath)) {
-        fs.rmSync(sessionPath, { recursive: true, force: true });
-    }
-    
-    const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
-    const { version } = await fetchLatestBaileysVersion();
-    
-    console.log(`[i] Using WA v${version.join(".")}`);
-
-    globalSock = makeWASocket({
-        version,
-        auth: state,
-        logger: pino({ level: "silent" }),
-        browser: Browsers.macOS("Chrome"),
-        syncFullHistory: false,
-        markOnlineOnConnect: true,
-        printQRInTerminal: false,
-        connectTimeoutMs: 120000,
-        keepAliveIntervalMs: 30000,
-        defaultQueryTimeoutMs: 60000
-    });
-
-    globalSock.ev.on("creds.update", saveCreds);
-
-    globalSock.ev.on("connection.update", async (update) => {
-        const { connection, lastDisconnect, qr } = update;
-        
-        if (isShuttingDown) return;
-        
-        // EXACT pattern from your working anon-bot pair.js
-        if (qr && !pairingCodeRequested && !globalSock.authState.creds.registered) {
-            pairingCodeRequested = true;
-            
-            console.log(`[i] Requesting pairing code for: ${cleanNumber}`);
-            await delay(2000);
-            
-            try {
-                const code = await globalSock.requestPairingCode(cleanNumber);
-                globalPairingCode = code;
-                
-                console.log(`[✓] PAIRING CODE: ${code}`);
-                console.log(`ANON_CODE_START:${code}:ANON_CODE_END`);
-                
-            } catch (err) {
-                console.error("[✗] Failed to get pairing code:", err.message);
-                pairingCodeRequested = false;
-            }
-        }
-
-        if (connection === "open") {
-            console.log("\n[✓] SUCCESS: DEVICE LINKED!");
-            activeWhatsAppConnections.set(cleanNumber, globalSock);
-            
-            // EXACT keep-alive from your anon-bot pair.js
-            while (!isShuttingDown) {
-                await delay(60000);
-                try { 
-                    await globalSock.sendPresenceUpdate('available'); 
-                } catch (e) {}
-            }
-        }
-
-        if (connection === "close") {
-            const statusCode = lastDisconnect?.error?.output?.statusCode;
-            
-            if (statusCode === 515 || statusCode === DisconnectReason.restartRequired) {
-                console.log("[i] 515: Server restart. Reconnecting...");
-                await delay(3000);
-                return startPairingSocket(cleanNumber);
-            }
-            
-            if (statusCode === 405) {
-                console.log("[!] 405: Not ready. Retrying...");
-                await delay(3000);
-                pairingCodeRequested = false;
-                return startPairingSocket(cleanNumber);
-            }
-            
-            if (statusCode === 408) {
-                console.log("[!] 408: Timeout. Retrying...");
-                await delay(3000);
-                return startPairingSocket(cleanNumber);
-            }
-            
-            if (statusCode === 428) {
-                console.log("[!] 428: Closed early. Retrying...");
-                await delay(3000);
-                pairingCodeRequested = false;
-                return startPairingSocket(cleanNumber);
-            }
-            
-            const shouldReconnect = statusCode !== DisconnectReason.loggedOut && statusCode !== 401;
-            
-            if (shouldReconnect) {
-                console.log("[i] Reconnecting...");
-                await delay(3000);
-                return startPairingSocket(cleanNumber);
-            } else {
-                console.log("[✗] Logged out or auth failed");
-            }
-        }
-    });
-
-    globalSock.ev.on("error", (err) => {
-        console.error("[!] Socket error:", err.message);
-    });
-}
 
 // ========== CONFIG ==========
 const ACCESS_KEY = process.env.ACCESS_KEY || 'GHOST-BAN-2026';
@@ -278,64 +179,6 @@ async function startWhatsAppBot(phoneNumber) {
     return sock;
 }
 
-// ========== PAIRING USING SUBPROCESS (fallback) ==========
-function spawnPairingProcess(phoneNumber) {
-    return new Promise((resolve, reject) => {
-        const cleanNumber = phoneNumber.replace(/\D/g, '');
-        const pairScript = path.join(__dirname, 'pair.js');
-        
-        if (!fs.existsSync(pairScript)) {
-            return reject(new Error('pair.js not found. Please add pair.js to your project.'));
-        }
-
-        console.log(chalk.cyan(`[i] Spawning pair.js for ${cleanNumber}`));
-        
-        const child = spawn('node', [pairScript, cleanNumber], {
-            stdio: ['pipe', 'pipe', 'pipe']
-        });
-
-        let output = '';
-        let code = null;
-        let responseSent = false;
-
-        child.stdout.on('data', (data) => {
-            const chunk = data.toString();
-            output += chunk;
-            console.log(chalk.gray('[pair.js]'), chunk.trim());
-            
-            const match = output.match(/ANON_CODE_START:([A-Z0-9]+):ANON_CODE_END/);
-            if (match && !code) {
-                code = match[1];
-                console.log(chalk.green(`[✓] Pairing code extracted: ${code}`));
-            }
-        });
-
-        child.stderr.on('data', (data) => {
-            console.error(chalk.red('[pair.js error]'), data.toString().trim());
-        });
-
-        child.on('close', (exitCode) => {
-            if (!responseSent) {
-                responseSent = true;
-                if (code) {
-                    const formattedCode = code.match(/.{1,4}/g)?.join("-") || code;
-                    resolve({ success: true, pairingCode: formattedCode });
-                } else {
-                    reject(new Error('Pairing process ended without generating code'));
-                }
-            }
-        });
-
-        setTimeout(() => {
-            if (!responseSent) {
-                responseSent = true;
-                child.kill();
-                reject(new Error('Timeout - pairing code not generated within 30 seconds'));
-            }
-        }, 30000);
-    });
-}
-
 // ========== API ROUTES ==========
 
 // Health check
@@ -407,20 +250,6 @@ async function updateGroupInfo(sock, groupJid) {
         await sock.updateProfilePicture(groupJid, picBuffer);
     }
 }
-
-// ========== GRACEFUL SHUTDOWN ==========
-process.on("SIGINT", async () => {
-    if (isShuttingDown) return;
-    isShuttingDown = true;
-    console.log("\n[!] Shutting down...");
-    try {
-        if (globalSock && globalSock.user) {
-            await globalSock.updateProfileStatus("Offline");
-        }
-    } catch (e) {}
-    console.log("[✓] Disconnected.");
-    process.exit(0);
-});
 
 // ========== START SERVER ==========
 async function main() {
