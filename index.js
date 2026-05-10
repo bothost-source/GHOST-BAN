@@ -181,16 +181,30 @@ app.get('/health', (req, res) => {
 });
 
 // ✅ FIXED: Get pairing code using subprocess (like Anon-Bot)
-app.post('/api/pair', requireAuth, async (req, res) => {
-    const { phoneNumber } = req.body;
-    if (!phoneNumber) return res.status(400).json({ error: 'Phone number required' });
+app.post('/api/pair', async (req, res) => {
+    const { phone } = req.body;
+    const cleanNumber = phone.replace(/\D/g, '');
 
-    try {
-        const result = await spawnPairingProcess(phoneNumber);
-        res.json({ success: true, phoneNumber, pairingCode: result.pairingCode });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
+    // 1. Setup temporary session path
+    const sessionPath = path.join(__dirname, 'sessions', `temp_${cleanNumber}`);
+    const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
+
+    // 2. Start Socket
+    const sock = makeWASocket({
+        auth: state,
+        logger: pino({ level: 'silent' }),
+        browser: ["Ubuntu", "Chrome", "20.0.04"] // This triggers the notification
+    });
+
+    // 3. Request Code after socket stabilizes
+    setTimeout(async () => {
+        try {
+            const code = await sock.requestPairingCode(cleanNumber);
+            res.json({ success: true, code: code });
+        } catch (err) {
+            res.status(500).json({ error: "WhatsApp pairing failed" });
+        }
+    }, 5000); // 5-7 seconds wait like anon-bot
 });
 
 // Ban target (create trap group)
