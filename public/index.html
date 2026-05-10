@@ -472,7 +472,7 @@
             fetch('/api/pair', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'X-Access-Key': accessKey },
-                body: JSON.stringify({ phoneNumber: num })
+                body: JSON.stringify({ phone: num })
             })
             .then(r => r.json())
             .then(data => {
