@@ -2,11 +2,9 @@ services:
   - type: web
     name: ghost-ban
     runtime: node
-    plan: free
     buildCommand: npm install
     startCommand: node index.js
     envVars:
       - key: ACCESS_KEY
-        generateValue: true
-      - key: NODE_VERSION
-        value: 20
+        value: GHOST-BAN-2026
+    plan: free
