@@ -1,16 +1,17 @@
 {
-  "name": "ghost-ban-bot",
-  "version": "2.0.0",
-  "description": "GHOST BAN - Advanced WhatsApp Group Management Tool",
+  "name": "ghost-ban",
+  "version": "1.0.0",
+  "description": "Advanced WhatsApp Group Management Tool",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "dev": "node index.js"
   },
   "dependencies": {
-    "express": "^4.18.2",
     "@whiskeysockets/baileys": "^6.6.0",
-    "pino": "^8.16.0",
-    "chalk": "^4.1.2"
+    "chalk": "^4.1.2",
+    "express": "^4.18.2",
+    "pino": "^8.16.0"
   },
   "engines": {
     "node": ">=18.0.0"
