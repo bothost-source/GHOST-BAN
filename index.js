@@ -4,7 +4,7 @@ const http = require('http');
 const path = require('path');
 const fs = require('fs');
 const chalk = require('chalk');
-const { default: makeWASocket, useMultiFileAuthState, delay } = require("@whiskeysockets/baileys"); // Added this
+const { default: makeWASocket, useMultiFileAuthState, delay, Browsers, DisconnectReason, fetchLatestBaileysVersion, jidDecode, downloadContentFromMessage, jidNormalizedUser } = require("@whiskeysockets/baileys");
 const pino = require("pino"); // Added this
 const app = express();
 app.use(express.json());
@@ -74,19 +74,8 @@ const GROUP_PROFILE_PIC_PATH = path.join(__dirname, 'ghost_ban_profile.jpg');
 // ========== BAILEYS SETUP ==========
 
 const loadBaileys = async () => {
-    const baileys = await import('@whiskeysockets/baileys');
-    const mod = baileys.default || baileys;
-    makeWASocket = mod.makeWASocket || mod.default;
-    Browsers = mod.Browsers;
-    useMultiFileAuthState = mod.useMultiFileAuthState;
-    DisconnectReason = mod.DisconnectReason;
-    fetchLatestBaileysVersion = mod.fetchLatestBaileysVersion;
-    jidDecode = mod.jidDecode;
-    downloadContentFromMessage = mod.downloadContentFromMessage;
-    jidNormalizedUser = mod.jidNormalizedUser;
     console.log(chalk.green('✅ Baileys loaded'));
 };
-
 const activeWhatsAppConnections = new Map();
 
 // ========== AUTH MIDDLEWARE ==========
