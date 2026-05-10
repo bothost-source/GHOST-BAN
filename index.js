@@ -10,10 +10,12 @@ const app = express();
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
+// At the top of index.js (after other declarations):
+const pairingSockets = new Map();
+
 // --- PAIRING ROUTE ---
 app.post('/api/pair', async (req, res) => {
     let responseSent = false;
-    let sock = null;
 
     try {
         const { phone } = req.body;
@@ -22,15 +24,21 @@ app.post('/api/pair', async (req, res) => {
         const cleanNumber = phone.replace(/\D/g, '');
         const sessionPath = path.join(__dirname, 'sessions', `temp_${cleanNumber}`);
         
-        // Clean old session to force fresh pairing
+        // Clean old session
         if (fs.existsSync(sessionPath)) {
             fs.rmSync(sessionPath, { recursive: true, force: true });
+        }
+        
+        // Kill old pairing socket if exists
+        if (pairingSockets.has(cleanNumber)) {
+            try { pairingSockets.get(cleanNumber).end(); } catch(e) {}
+            pairingSockets.delete(cleanNumber);
         }
         
         const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
         const { version } = await fetchLatestBaileysVersion();
 
-        sock = makeWASocket({
+        const sock = makeWASocket({
             version,
             auth: state,
             logger: pino({ level: 'silent' }),
@@ -43,40 +51,36 @@ app.post('/api/pair', async (req, res) => {
             defaultQueryTimeoutMs: 60000
         });
 
+        // Save to global map so socket stays alive after HTTP response
+        pairingSockets.set(cleanNumber, sock);
         sock.ev.on('creds.update', saveCreds);
 
         let pairingCodeRequested = false;
 
-        // Listen for connection updates - EXACTLY like pair.js
         sock.ev.on('connection.update', async (update) => {
             const { connection, lastDisconnect, qr } = update;
             
-            // CRITICAL: Wait for qr AND check not registered (EXACT match to pair.js)
             if (qr && !pairingCodeRequested && !sock.authState.creds.registered) {
                 pairingCodeRequested = true;
-
                 console.log(`[i] Requesting pairing code for: ${cleanNumber}`);
-                
-                // CRITICAL: 2-second delay before requesting (race condition fix from pair.js)
                 await delay(2000);
                 
                 try {
                     const code = await sock.requestPairingCode(cleanNumber);
-                    responseSent = true;
+                    if (!code) throw new Error('Pairing code undefined');
                     
                     console.log(`[✓] Pairing code generated: ${code}`);
+                    responseSent = true;
                     
-                    const formattedCode = code?.match(/.{1,4}/g)?.join('-') || code;
-                    
+                    const formattedCode = code.toString().match(/.{1,4}/g)?.join('-') || code;
                     res.json({ success: true, pairingCode: formattedCode, code: formattedCode });
                     
-                    // Close socket after sending code (we don't need to keep it open for pairing)
-                    setTimeout(() => sock?.end(), 5000);
+                    // DON'T close socket - keep it alive for WhatsApp notification
+                    // Socket stays in pairingSockets map
                     
                 } catch (err) {
-                    console.error('[✗] Failed to get pairing code:', err.message);
+                    console.error('[✗] Failed:', err.message);
                     pairingCodeRequested = false;
-                    
                     if (!responseSent) {
                         responseSent = true;
                         res.status(500).json({ error: "WhatsApp Fail: " + err.message });
@@ -84,22 +88,31 @@ app.post('/api/pair', async (req, res) => {
                 }
             }
 
+            if (connection === 'open') {
+                console.log(chalk.green(`✅ ${cleanNumber}: Device linked!`));
+                // Move from pairingSockets to activeWhatsAppConnections
+                pairingSockets.delete(cleanNumber);
+                activeWhatsAppConnections.set(cleanNumber, sock);
+            }
+
             if (connection === 'close') {
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
+                pairingSockets.delete(cleanNumber);
                 if (statusCode !== DisconnectReason.loggedOut && !responseSent) {
-                    // Don't auto-reconnect for API pairing requests
+                    // Don't auto-reconnect for pairing
                 }
             }
         });
 
-        // 35-second timeout
+        // 60-second timeout for HTTP response only
         setTimeout(() => {
             if (!responseSent) {
                 responseSent = true;
-                sock?.end();
+                pairingSockets.delete(cleanNumber);
+                try { sock.end(); } catch(e) {}
                 res.status(500).json({ error: "WhatsApp Fail: Timeout" });
             }
-        }, 35000);
+        }, 60000);
 
     } catch (e) {
         if (!responseSent) {
@@ -107,7 +120,7 @@ app.post('/api/pair', async (req, res) => {
             res.status(500).json({ error: "Server Error: " + e.message });
         }
     }
-});  
+});
 
 // ========== CONFIG ==========
 const ACCESS_KEY = process.env.ACCESS_KEY || 'GHOST-BAN-2026';
