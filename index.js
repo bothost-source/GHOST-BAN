@@ -87,13 +87,7 @@ const loadBaileys = async () => {
     console.log(chalk.green('✅ Baileys loaded'));
 };
 
-const pino = require('pino');
 const activeWhatsAppConnections = new Map();
-
-// ========== EXPRESS APP ==========
-const app = express();
-app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
 
 // ========== AUTH MIDDLEWARE ==========
 function requireAuth(req, res, next) {
