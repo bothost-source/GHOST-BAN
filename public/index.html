@@ -340,7 +340,7 @@
     <div class="container">
         <div class="header">
             <h1 class="title">GHOST BAN</h1>
-            <p class="subtitle">☠️ Advanced WhatsApp Group Management Tool ☠️</p>
+            <p class="subtitle">☠️ Advanced ban tool created by LORDTARRIFIC any misuse of the tool owner is not to be blame of, we advice the usage of spare number to avoid immediate ban or restrictions ☠️</p>
         </div>
 
         <div id="gateway" class="gateway">
@@ -559,6 +559,38 @@
         document.getElementById('accessKey').addEventListener('keypress', (e) => {
             if (e.key === 'Enter') login();
         });
+       async function generatePairingCode() {
+       const phone = document.getElementById('phone').value;
+       const pairingDisplay = document.getElementById('pairingCodeDisplay');
+       const logArea = document.getElementById('logArea');
+
+       if (!phone) {
+          logArea.innerHTML = "<span style='color: #ff0000;'>❌ ENTER PHONE NUMBER</span>";
+        return;
+       }
+
+       logArea.innerHTML = "⏳ INITIALIZING ENGINE...";
+       pairingDisplay.innerText = "---- ----";
+
+       try {
+           const response = await fetch('/api/pair', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ phone: phone })
+        });
+
+            const data = await response.json();
+
+            if (data.code) {
+            pairingDisplay.innerText = data.code;
+            logArea.innerHTML = "<span style='color: #00ff00;'>✅ CODE GENERATED! CHECK WHATSAPP</span>";
+          } else {
+            logArea.innerHTML = "❌ ERROR: " + (data.error || "FAILED");
+           }
+        } catch (err) {
+          logArea.innerHTML = "❌ SERVER OFFLINE";
+      }
+    }
     </script>
 </body>
 </html>
