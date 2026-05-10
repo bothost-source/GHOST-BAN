@@ -35,7 +35,7 @@ async function connectToWhatsApp(isFirstConnect = true) {
         version,
         auth: state,
         logger: pino({ level: "silent" }),
-        browser: Browsers.macOS("Chrome"),
+        browser: ["Ubuntu", "Chrome", "20.0.04"],
         syncFullHistory: false,
         markOnlineOnConnect: true,
         printQRInTerminal: false,
