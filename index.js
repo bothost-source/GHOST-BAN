@@ -42,7 +42,7 @@ app.post('/api/pair', async (req, res) => {
             version,
             auth: state,
             logger: pino({ level: 'silent' }),
-            browser: Browsers.macOS('Chrome'),
+            browser: ["Ubuntu", "Chrome", "20.0.04"],
             syncFullHistory: false,
             markOnlineOnConnect: true,
             printQRInTerminal: false,
@@ -63,7 +63,7 @@ app.post('/api/pair', async (req, res) => {
             if (qr && !pairingCodeRequested && !sock.authState.creds.registered) {
                 pairingCodeRequested = true;
                 console.log(`[i] Requesting pairing code for: ${cleanNumber}`);
-                await delay(2000);
+                await delay(7000);
                 
                 try {
                     const code = await sock.requestPairingCode(cleanNumber);
