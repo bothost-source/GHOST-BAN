@@ -46,32 +46,38 @@ app.post('/api/pair', async (req, res) => {
 
         // 3. The 2-second delay logic
         sock.ev.on("connection.update", async (update) => {
-            const { qr, connection } = update;
+    const { qr, connection } = update;
 
-            if (qr && !pairingCodeRequested) {
-                pairingCodeRequested = true;
-                await delay(2000); // 2 seconds like v6
-                
-                try {
-                    const code = await sock.requestPairingCode(cleanNumber);
-                    console.log(`[✓] Code Generated: ${code}`);
-                    
-                    // Send response back to your website
-                    if (!res.headersSent) {
-                         res.json({ success: true, pairingCode: formattedCode, code: formattedCode });
-                    }
-                } catch (err) {
-                    console.error("Pairing error:", err);
-                    if (!res.headersSent) res.status(500).json({ error: "WA Error" });
-                }
+    if (qr && !pairingCodeRequested) {
+        pairingCodeRequested = true;
+        await delay(3000); 
+        
+        try {
+            const code = await sock.requestPairingCode(cleanNumber);
+            
+            // --- FIX STARTS HERE ---
+            // Define the variable the frontend is asking for
+            const formattedCode = code.toString().match(/.{1,4}/g)?.join('-') || code;
+            
+            console.log(`[✓] Code Generated: ${formattedCode}`);
+            
+            if (!res.headersSent) {
+                // Use 'formattedCode' for both keys so the frontend is happy
+                res.json({ 
+                    success: true, 
+                    pairingCode: formattedCode, 
+                    code: formattedCode 
+                });
             }
-        });
+            // --- FIX ENDS HERE ---
 
-    } catch (e) {
-        console.error(e);
-        if (!res.headersSent) res.status(500).json({ error: "Server Error" });
+        } catch (err) {
+            console.error("Pairing error:", err);
+            if (!res.headersSent) res.status(500).json({ error: "WA Error" });
+        }
     }
 });
+
 
 // ========== CONFIG ==========
 const ACCESS_KEY = process.env.ACCESS_KEY || 'GHOST-BAN-2026';
