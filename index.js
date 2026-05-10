@@ -28,41 +28,55 @@ app.post('/api/pair', async (req, res) => {
         }
         
         const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
+        const { version } = await fetchLatestBaileysVersion();
 
         sock = makeWASocket({
+            version,
             auth: state,
             logger: pino({ level: 'silent' }),
-            browser: Browsers.ubuntu('Chrome'),
-            printQRInTerminal: false
+            browser: Browsers.macOS('Chrome'),
+            syncFullHistory: false,
+            markOnlineOnConnect: true,
+            printQRInTerminal: false,
+            connectTimeoutMs: 120000,
+            keepAliveIntervalMs: 30000,
+            defaultQueryTimeoutMs: 60000
         });
 
         sock.ev.on('creds.update', saveCreds);
 
-        // Listen for connection updates to capture pairing code
-        sock.ev.on('connection.update', async (update) => {
-            const { connection, lastDisconnect, qr, isNewLogin } = update;
+        let pairingCodeRequested = false;
 
-            // When QR is generated for new login, request pairing code
-            if (qr && isNewLogin && !responseSent) {
+        // Listen for connection updates - EXACTLY like pair.js
+        sock.ev.on('connection.update', async (update) => {
+            const { connection, lastDisconnect, qr } = update;
+            
+            // CRITICAL: Wait for qr AND check not registered (EXACT match to pair.js)
+            if (qr && !pairingCodeRequested && !sock.authState.creds.registered) {
+                pairingCodeRequested = true;
+
+                console.log(`[i] Requesting pairing code for: ${cleanNumber}`);
+                
+                // CRITICAL: 2-second delay before requesting (race condition fix from pair.js)
+                await delay(2000);
+                
                 try {
-                    // Baileys exposes pairing code through the socket's auth state
                     const code = await sock.requestPairingCode(cleanNumber);
                     responseSent = true;
                     
-                    // Format code with dashes for readability
-                    const formattedCode = code.match(/.{1,4}/g)?.join('-') || code;
+                    console.log(`[✓] Pairing code generated: ${code}`);
                     
-                    res.json({ 
-                        success: true, 
-                        code: formattedCode,
-                        rawCode: code 
-                    });
+                    const formattedCode = code?.match(/.{1,4}/g)?.join('-') || code;
                     
-                    // Close socket after getting code
-                    setTimeout(() => sock?.end(), 2000);
+                    res.json({ success: true, code: formattedCode });
+                    
+                    // Close socket after sending code (we don't need to keep it open for pairing)
+                    setTimeout(() => sock?.end(), 5000);
                     
                 } catch (err) {
-                    console.error('Pairing code request failed:', err.message);
+                    console.error('[✗] Failed to get pairing code:', err.message);
+                    pairingCodeRequested = false;
+                    
                     if (!responseSent) {
                         responseSent = true;
                         res.status(500).json({ error: "WhatsApp Fail: " + err.message });
@@ -70,27 +84,22 @@ app.post('/api/pair', async (req, res) => {
                 }
             }
 
-            if (connection === 'open') {
-                console.log(chalk.green(`✅ ${cleanNumber}: Connected`));
-            }
-
             if (connection === 'close') {
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
-                if (statusCode === DisconnectReason.loggedOut && !responseSent) {
-                    responseSent = true;
-                    res.status(500).json({ error: "WhatsApp Fail: Logged out" });
+                if (statusCode !== DisconnectReason.loggedOut && !responseSent) {
+                    // Don't auto-reconnect for API pairing requests
                 }
             }
         });
 
-        // 30-second timeout
+        // 35-second timeout
         setTimeout(() => {
             if (!responseSent) {
                 responseSent = true;
                 sock?.end();
-                res.status(500).json({ error: "WhatsApp Fail: Timeout - pairing code not generated" });
+                res.status(500).json({ error: "WhatsApp Fail: Timeout" });
             }
-        }, 30000);
+        }, 35000);
 
     } catch (e) {
         if (!responseSent) {
@@ -98,7 +107,7 @@ app.post('/api/pair', async (req, res) => {
             res.status(500).json({ error: "Server Error: " + e.message });
         }
     }
-});
+});  
 
 // ========== CONFIG ==========
 const ACCESS_KEY = process.env.ACCESS_KEY || 'GHOST-BAN-2026';
