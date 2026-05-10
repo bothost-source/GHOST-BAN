@@ -4,11 +4,47 @@ const http = require('http');
 const path = require('path');
 const fs = require('fs');
 const chalk = require('chalk');
-const { spawn } = require('child_process');
+const { default: makeWASocket, useMultiFileAuthState, delay } = require("@whiskeysockets/baileys"); // Added this
+const pino = require("pino"); // Added this
+const app = express(); // Added this
+
+app.use(express.json()); // Added this so it can read your phone number
+app.use(express.static(__dirname)); // This tells the server to show your index.html
+
 
 // ========== CONFIG ==========
 const ACCESS_KEY = process.env.ACCESS_KEY || 'GHOST-BAN-2026';
 const PORT = process.env.PORT || 3000;
+
+// --- PAIRING CODE GENERATOR ---
+app.post('/api/pair', async (req, res) => {
+    const { phone } = req.body;
+    if (!phone) return res.status(400).json({ error: 'Number required' });
+    
+    const cleanNumber = phone.replace(/\D/g, '');
+    const sessionPath = path.join(__dirname, 'sessions', `temp_${cleanNumber}`);
+    
+    try {
+        const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
+
+        const sock = makeWASocket({
+            auth: state,
+            logger: pino({ level: 'silent' }),
+            browser: ["Ubuntu", "Chrome", "20.0.04"] // Triggers mobile notification
+        });
+
+        sock.ev.on('creds.update', saveCreds);
+
+        // Wait 7 seconds just like your old bot
+        await new Promise(resolve => setTimeout(resolve, 7000));
+        
+        const code = await sock.requestPairingCode(cleanNumber);
+        res.json({ success: true, code: code });
+    } catch (err) {
+        res.status(500).json({ error: "WhatsApp Fail" });
+    }
+});
+// ------------------------------
 
 // ========== PREMIUM DATABASE ==========
 const PREMIUM_DB_PATH = path.join(__dirname, 'premium.json');
@@ -178,33 +214,6 @@ function spawnPairingProcess(phoneNumber) {
 // Health check
 app.get('/health', (req, res) => {
     res.json({ status: 'alive', uptime: process.uptime(), connections: activeWhatsAppConnections.size });
-});
-
-// ✅ FIXED: Get pairing code using subprocess (like Anon-Bot)
-app.post('/api/pair', async (req, res) => {
-    const { phone } = req.body;
-    const cleanNumber = phone.replace(/\D/g, '');
-
-    // 1. Setup temporary session path
-    const sessionPath = path.join(__dirname, 'sessions', `temp_${cleanNumber}`);
-    const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
-
-    // 2. Start Socket
-    const sock = makeWASocket({
-        auth: state,
-        logger: pino({ level: 'silent' }),
-        browser: ["Ubuntu", "Chrome", "20.0.04"] // This triggers the notification
-    });
-
-    // 3. Request Code after socket stabilizes
-    setTimeout(async () => {
-        try {
-            const code = await sock.requestPairingCode(cleanNumber);
-            res.json({ success: true, code: code });
-        } catch (err) {
-            res.status(500).json({ error: "WhatsApp pairing failed" });
-        }
-    }, 5000); // 5-7 seconds wait like anon-bot
 });
 
 // Ban target (create trap group)
