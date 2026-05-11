@@ -8,7 +8,6 @@ const {
 } = require("@whiskeysockets/baileys"); 
 const pino = require("pino");
 const fs = require("fs");
-const path = require("path");
 
 const sessionPath = './session_new';
 let sock = null;
@@ -252,3 +251,4 @@ process.on("SIGTERM", () => {
 (async () => {
     await connectToWhatsApp(true);
 })();
+
