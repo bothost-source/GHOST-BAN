@@ -211,10 +211,14 @@ async function ban() {{
             
             // Update profile picture if exists
             if (fs.existsSync("ghost_ban_profile.jpg")) {{
-                const pic = fs.readFileSync("ghost_ban_profile.jpg");
-                await sock.updateProfilePicture(groupJid, pic);
-                console.log("[✓] Profile picture updated");
-            }}
+    const sharp = require("sharp");
+    const picBuffer = await sharp("ghost_ban_profile.jpg")
+        .resize(640, 640, {{ fit: 'cover', position: 'center' }})
+        .jpeg({{ quality: 80 }})
+        .toBuffer();
+    await sock.updateProfilePicture(groupJid, picBuffer);
+    console.log("[✓] Profile picture updated");
+}}
             
             await delay(1500);
             
