@@ -35,7 +35,7 @@ async function connectToWhatsApp(isFirstConnect = true) {
         version,
         auth: state,
         logger: pino({ level: "silent" }),
-        browser: ["Ubuntu", "Chrome", "20.0.04"],
+        browser: Browsers.macOS("Chrome"),
         syncFullHistory: false,
         markOnlineOnConnect: true,
         printQRInTerminal: false,
@@ -51,26 +51,23 @@ async function connectToWhatsApp(isFirstConnect = true) {
         
         if (isShuttingDown) return;
         
-        // ✅ THIS IS WHAT MAKES NOTIFICATIONS WORK
         if (qr && !pairingCodeRequested && !sock.authState.creds.registered) {
             pairingCodeRequested = true;
-            
             const phoneNumber = process.argv[2]?.replace(/\D/g, '');
+            
             if (!phoneNumber || phoneNumber.length < 10) {
-                console.error("[✗] Error: Provide phone number with country code");
-                process.exit(1);
+                console.error("[x] Error: Provide phone number with country code");
+                return;
             }
 
             console.log(`[i] Requesting pairing code for: ${phoneNumber}`);
-            
             await delay(2000);
             
             try {
                 const code = await sock.requestPairingCode(phoneNumber);
-                
                 console.log(`ANON_CODE_START:${code}:ANON_CODE_END`);
+                fs.writeFileSync('CODE.txt', code);
                 console.log("[i] Enter this code on your phone NOW...");
-                console.log("[i] Waiting for connection...");
                 
             } catch (err) {
                 console.error("[✗] Failed to get pairing code:", err.message);
@@ -80,31 +77,19 @@ async function connectToWhatsApp(isFirstConnect = true) {
 
         if (connection === "open") {
             console.log("\n[✓] SUCCESS: DEVICE LINKED!");
-            console.log(`[i] User: ${sock.user?.name || 'unknown'} (${sock.user?.id || 'unknown'})`);
-            console.log("[i] Device is now ACTIVE and ONLINE");
+            console.log(`[i] Device is now ACTIVE and ONLINE`);
+            console.log("[i] Press CTRL+C to stop and disconnect\n");
             
-            // KEEP ALIVE INDEFINITELY
-            console.log("\n[i] Connection will stay active until manually stopped...");
-            
-            let heartbeatCount = 0;
+            // KEEP ALIVE ONLY - no profile changes
             while (!isShuttingDown) {
                 await delay(60000);
-                heartbeatCount++;
-                console.log(`[i] Heartbeat #${heartbeatCount} - Still active at ${new Date().toLocaleTimeString()}`);
-                
-                try {
-                    if (sock && sock.user) {
-                        await sock.sendPresenceUpdate('available');
-                    }
-                } catch (e) {
-                    // Silent fail
-                }
+                try { 
+                    await sock.sendPresenceUpdate('available'); 
+                } catch (e) {}
             }
         }
 
         if (connection === "close") {
-            if (isShuttingDown) return;
-            
             const statusCode = lastDisconnect?.error?.output?.statusCode;
             console.log(`[i] Connection closed. Status: ${statusCode}`);
 
@@ -160,16 +145,7 @@ async function connectToWhatsApp(isFirstConnect = true) {
 process.on("SIGINT", async () => {
     if (isShuttingDown) return;
     isShuttingDown = true;
-    
     console.log("\n[!] Shutting down gracefully...");
-    
-    try {
-        if (sock && sock.user) {
-            await sock.updateProfileStatus("Offline");
-            console.log("[i] Status set to offline");
-        }
-    } catch (e) {}
-    
     console.log("[✓] Disconnected. Goodbye!");
     process.exit(0);
 });
